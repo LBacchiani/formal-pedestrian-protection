@@ -2,7 +2,6 @@ import carla
 import cv2
 import numpy as np
 import pygame
-import paho.mqtt.client as mqtt
 from ultralytics import YOLO
 from enum import Enum
 from dataclasses import dataclass
@@ -13,8 +12,6 @@ import threading
 import math
 from typing import Tuple
 import requests
-from Adas import Forward_collision_warning_mqtt, Fcw_state
-
 
 
 #########################################
@@ -38,7 +35,7 @@ class Mode(Enum):
 ################# Config #################
 ##########################################
 
-MODE = Mode.STEERING_WHEEL
+MODE = Mode.KEYBOARD
 CAMERA_DEBUG = True
 NUM_WALKERS = 75
 
@@ -46,18 +43,12 @@ BROKER = "localhost"
 PORT = 1883
 TOPIC = "pedestrian_monitoring"
 
-CAMERA_WIDTH = 2000
+CAMERA_WIDTH = 1080
 CAMERA_HEIGHT = 720
-VIEW_FOV = 120
+VIEW_FOV = 80
 
-
-# radar_sensor = None
-# input_radar = None
-# input_radar_lock = threading.Lock()
 
 model = YOLO("yolov8n.pt")
-safety_state = "normal"   # può essere "normal", "soft", "emergency"
-
 
 if CAMERA_DEBUG:
     cv2.namedWindow('RGB image', cv2.WINDOW_NORMAL)
@@ -103,25 +94,11 @@ input_depth_image_lock = threading.Lock()
 processed_output = None
 processed_output_lock = threading.Lock()
 
-mqtt_client = mqtt.Client()
-
-try:
-    mqtt_client.connect(BROKER, PORT, 60)
-    mqtt_client.loop_start()
-    print(f"Listening to {TOPIC} on {BROKER}...")
-except Exception as e:
-    print("Connection failed:", e)
-
 ###########################################
 ############ Utility functions ############
 ###########################################
-def get_asphalt_friction_coefficient():
-    # Valori tipici: asciutto ~0.9, bagnato ~0.5, ghiaccio ~0.1
-    return 0.9
-
 def emergency_brake():
     global vehicle
-    print("⚠️ EMERGENCY BRAKE TRIGGERED by FCW")
     control = carla.VehicleControl(throttle=0.0, brake=1.0)
     vehicle.apply_control(control)
 
@@ -196,9 +173,6 @@ def world_to_pixel(
         return int(u), int(v)
     return None
 
-
-
-
 def setup_camera(car: carla.Vehicle):
     camera_transform = carla.Transform(carla.Location(x=1.2, y=0, z=1.4), carla.Rotation(pitch=-5.0))
     blueprint_library = world.get_blueprint_library()
@@ -206,13 +180,13 @@ def setup_camera(car: carla.Vehicle):
     rgb_bp = blueprint_library.find('sensor.camera.rgb')
     rgb_bp.set_attribute('image_size_x', str(CAMERA_WIDTH))
     rgb_bp.set_attribute('image_size_y', str(CAMERA_HEIGHT))
-    rgb_bp.set_attribute('fov', str(VIEW_FOV))  # <-- aggiunto
+    rgb_bp.set_attribute('fov', str(VIEW_FOV))
     rgb_camera = world.spawn_actor(rgb_bp, camera_transform, attach_to=car)
 
     depth_bp = blueprint_library.find('sensor.camera.depth')
     depth_bp.set_attribute('image_size_x', str(CAMERA_WIDTH))
     depth_bp.set_attribute('image_size_y', str(CAMERA_HEIGHT))
-    depth_bp.set_attribute('fov', str(VIEW_FOV))  # <-- aggiunto
+    depth_bp.set_attribute('fov', str(VIEW_FOV))
     depth_camera = world.spawn_actor(depth_bp, camera_transform, attach_to=car)
 
     # usa il FOV reale impostato
@@ -230,58 +204,53 @@ def setup_camera(car: carla.Vehicle):
 
 
 def spawn_walker(world: carla.World):
-    """
-    Spawns a pedestrian walker in the given CARLA world and makes it walk to a random destination.
-    Args:
-        world (carla.World): The CARLA world object where the walker will be spawned.
-    Returns:
-        tuple: A tuple containing the walker actor and its controller actor.
-               If spawning fails, returns (None, None).
-    """
     blueprint_library = world.get_blueprint_library()
 
-    walker_blueprints = list(blueprint_library.filter('walker.pedestrian.*'))
+    # scegli solo i blueprint che ti interessano
+    allowed_ids = ["walker.pedestrian.0042", "walker.pedestrian.0039", "walker.pedestrian.0037"]
+    walker_blueprints = [bp for bp in blueprint_library.filter('walker.pedestrian.*') if bp.id in allowed_ids]
 
     if not walker_blueprints:
         return None, None
 
+    # scegli uno dei blueprint "grossi"
     walker_bp = random.choice(walker_blueprints)
 
+    # assegna velocità
     if walker_bp.has_attribute("speed"):
         speed = random.uniform(0.8, 2.0)
         walker_bp.set_attribute('speed', str(speed))
     else:
         speed = 1.0
 
+    # spawn casuale
     spawn_points = world.get_map().get_spawn_points()
     if not spawn_points:
         return None, None
 
     spawn_point = random.choice(spawn_points)
-
     walker = world.try_spawn_actor(walker_bp, spawn_point)
     if walker is None:
         return None, None
 
+    # aggiungi controller AI
     controller_bp = blueprint_library.find('controller.ai.walker')
-    if controller_bp is None:
-        return walker, None
-
     controller = world.try_spawn_actor(controller_bp, carla.Transform(), walker)
     if controller:
         controller.start()
-        # Make the walker walk randomly by continuously assigning new random destinations
+
         def random_walk():
             while controller.is_alive and walker.is_alive:
                 destination = world.get_random_location_from_navigation()
                 if destination:
                     controller.go_to_location(destination)
                 controller.set_max_speed(speed)
-                # Wait for a random time before assigning a new destination
                 time.sleep(random.uniform(5, 15))
+
         threading.Thread(target=random_walk, daemon=True).start()
 
     return walker, controller
+
 
 
 ##########################################
@@ -357,6 +326,22 @@ def send_data_async(payload: dict):
             print("HTTP send failed:", e)
     threading.Thread(target=_send, daemon=True).start()
 
+def max_yaw_allowed(distance):
+    """
+    Restituisce l'angolo massimo (in gradi) che consideriamo crossing
+    in funzione della distanza del pedone.
+    - molto vicino (<=10 m): ±45°
+    - medio (30 m): ±15°
+    - lontano (>=50 m): ±5°
+    """
+    if distance <= 10:
+        return 45
+    elif distance >= 50:
+        return 5
+    else:
+        # interpolazione lineare tra (10m,45°) e (50m,5°)
+        return 45 - (distance - 10) * (40 / 40)  # da 45° a 5°
+
 
 def process_image():
     """
@@ -364,15 +349,17 @@ def process_image():
       - legge RGB e Depth
       - fa YOLO per i pedoni
       - calcola distanza e time-to-collision
-      - aggiorna safety_state
-      - invia dati al server HTTP
-      - aggiorna processed_output
+      - filtra per confidenza >= 70% e posizione davanti
+      - invia SEMPRE i dati HTTP ad ogni frame (senza flag cumulativi)
     """
     global input_rgb_image, input_depth_image, processed_output, safety_state
+
     last_inference_time = 0.0
-    target_dt = 0.10  # 2 Hz
+    target_dt = 0.20  # 4 Hz
+    crossing = False
 
     while True:
+        crossing = False
         # ---- acquisizione immagini ----
         with input_rgb_image_lock, input_depth_image_lock:
             if input_rgb_image is None or input_depth_image is None:
@@ -398,10 +385,18 @@ def process_image():
         # ---- detection pedoni (YOLO) ----
         detections = detect_pedestrians(rgb_image)
         detected_pedestrians: List[Pedestrian] = []
+
         for conf, _, centroid in detections:
             distance = get_distance_to_pedestrian_centroid(centroid, depth_image)
-            time_to_collision = distance / vehicle_speed_mps if vehicle_speed_mps > 0 else float('inf')
             yaw, pitch = pixel_to_angle(centroid[0], centroid[1], rgb_camera.calibration)
+
+            # ---- filtro posizione davanti ----
+            yaw_deg = abs(math.degrees(yaw))
+            threshold = max_yaw_allowed(distance)
+
+            crossing = yaw_deg <= threshold
+
+            time_to_collision = distance / vehicle_speed_mps if vehicle_speed_mps > 0 else float('inf')
             detected_pedestrians.append(
                 Pedestrian(
                     x=centroid[0],
@@ -413,7 +408,7 @@ def process_image():
                 )
             )
 
-        # ---- trova pedone più vicino (camera) ----
+        # ---- trova pedone più vicino ----
         closest_ped = min(detected_pedestrians, key=lambda p: p.distance) if detected_pedestrians else None
         conf = max([c for c, _, _ in detections]) if detections else None
         yaw, pitch = (pixel_to_angle(closest_ped.x, closest_ped.y, rgb_camera.calibration)
@@ -428,22 +423,24 @@ def process_image():
             "camera_distance": closest_ped.distance if closest_ped else None,
             "camera_yaw_deg": math.degrees(yaw) if yaw is not None else None,
             "camera_pitch_deg": math.degrees(pitch) if pitch is not None else None,
-            "camera_ttc": ttc_camera,
+            "camera_ttc": ttc_camera if conf else None,
+            "crossing": crossing if conf else None
         }
 
-        # ---- invio asincrono ----
+        # ---- invio asincrono SEMPRE ----
         # send_data_async(payload)
 
-        # ---- stampa riassuntiva ----
-        # print("[SUMMARY]",
-        #     # f"ts={now:.1f}",
-        #     # f"speed={vehicle_speed_mps:.2f} m/s",
-        #     f"YOLO conf={conf:.2f}" if conf else "YOLO none",
-        #     f"cam_dist={closest_ped.distance:.1f}m" if closest_ped else "cam none",
-        #     f"cam_ttc={ttc_camera:.2f}" if ttc_camera else "",
-        #     f"cam_yaw={math.degrees(yaw):.1f}°" if yaw is not None else "",
-        #     f"cam_pitch={math.degrees(pitch):.1f}°" if pitch is not None else "",
-        # )
+        # ---- stampa di debug ----
+        print("[SUMMARY]",
+            f"ts={payload['timestamp']:.2f}",
+            f"speed={payload['vehicle_speed']:.2f} m/s",
+            f"yolo_conf={payload['yolo_conf']:.2f}" if payload['yolo_conf'] is not None else "yolo_conf=None",
+            f"cam_dist={payload['camera_distance']:.1f}m" if payload['camera_distance'] is not None else "cam_dist=None",
+            f"cam_yaw={payload['camera_yaw_deg']:.1f}°" if payload['camera_yaw_deg'] is not None else "cam_yaw=None",
+            f"cam_pitch={payload['camera_pitch_deg']:.1f}°" if payload['camera_pitch_deg'] is not None else "cam_pitch=None",
+            f"cam_ttc={payload['camera_ttc']:.2f}" if payload['camera_ttc'] is not None else "cam_ttc=None",
+            f"crossing={payload['crossing']}" if payload['crossing'] is not None else "crossing=None"
+        )
 
         # ---- salva output ----
         with processed_output_lock:
@@ -481,8 +478,7 @@ class GameLoop(object):
                 traffic_manager.set_synchronous_mode(True)
 
             if not self.sim_world.get_settings().synchronous_mode:
-                print('WARNING: You are currently in asynchronous mode and could '
-                    'experience some issues with the traffic simulation')
+                pass
 
             self.display = pygame.display.set_mode(
                 (args.width, args.height),
@@ -521,20 +517,6 @@ class GameLoop(object):
 
                 global safety_state
 
-                # # ---- gestione frenata in base allo stato ----
-                # if safety_state == "emergency":
-                #     control = carla.VehicleControl(throttle=0.0, brake=1.0)
-                #     self.world.player.apply_control(control)
-                #     print("⚠️ EMERGENCY BRAKE - user input disabled")
-                # elif safety_state == "soft":
-                #     if self.controller.parse_events(self.world, clock):
-                #         return
-                #     control = self.world.player.get_control()
-                #     control.throttle = min(control.throttle, 0.2)
-                #     control.brake = max(control.brake, 0.3)
-                #     self.world.player.apply_control(control)
-                #     print("⚠️ Soft braking - user input limited")
-                # else:
                 if self.controller.parse_events(self.world, clock):
                     return
 
@@ -660,15 +642,6 @@ game_loop = setup()
 vehicle = world.get_actors().filter('vehicle.*')[0]
 rgb_camera, depth_camera = setup_camera(vehicle)
 
-fcw_system = Forward_collision_warning_mqtt(
-    world=world,
-    attached_vehicle=vehicle,
-    get_asphalt_friction_coefficient=get_asphalt_friction_coefficient,
-    action_listener=emergency_brake,
-    mqtt_broker="localhost",   # puoi anche usare broker.emqx.io
-    mqtt_port=1883
-)
-
 def rgb_camera_callback(image):
     try:
         global input_rgb_image
@@ -694,10 +667,6 @@ threading.Thread(target=process_image, daemon=True).start()
 
 def cleanup():
     remove_all(world)
-    try:
-        fcw_system.destroy()
-    except:
-        pass
 
 # start the game loop
 try:
