@@ -1,636 +1,373 @@
-
-from dataclasses import dataclass
-from enum import Enum, auto
+from enum import Enum
 from typing import Optional
-import math
+from collections import deque
+import time
 
+# ============================================================================
+# GLOBAL THRESHOLDS
+# ============================================================================
+
+# Buffer size
+N = 10
+
+# Detection thresholds
+TH_C = 0.5  # Threshold for certain detection (confidence)
+TH_D_STALE = 500  # Threshold for detection stale data (ms)
+TH_C_STALE = 500  # Threshold for crossing stale data (ms)
+
+# Time-to-collision thresholds (seconds)
+TH_TTC_S = 5.0  # Safe TTC threshold
+TH_TTC_R = 3.0  # Risky TTC threshold
+TH_TTC_C = 1.5  # Critical TTC threshold
+
+# Staleness upper bound
+MAX_STALE = 2000  # Maximum staleness (ms)
+
+DETECTION_CONSENSUS = CROSSING_CONSENSUS = 0.7
+S_DISTANCE_CONSENSUS = 0.8
+SR_DISTANCE_CONSENSUS = 0.6
+RC_DISTANCE_CONSENSUS = 0.4
+C_DISTANCE_CONSENSUS = 0.2
+
+
+
+# ============================================================================
+# STATE DEFINITIONS
+# ============================================================================
 
 class State(Enum):
-    """Automaton states for pedestrian protection"""
-    NORMAL = auto()
-    SAFE_WARNING = auto()
-    RISKY_SLOWDOWN = auto()
-    CRITICAL_SLOWDOWN = auto()
-    SOFT_BRAKING = auto()
-    EMERGENCY_BRAKING = auto()
+    """States of the pedestrian protection automaton"""
+    NORMAL = "Normal"
+    SAFE_WARNING = "SafeWarning"
+    THROTTLING = "Throttling"
+    CRITICAL_SLOWDOWN = "CriticalSlowdown"
+    SOFT_BRAKING = "SoftBraking"
+    EMERGENCY_BRAKING = "EmergencyBraking"
 
 
 class Action(Enum):
-    """Actions corresponding to each state"""
-    NONE = auto()
-    WARNING = auto()
-    THROTTLE_REDUCE = auto()
-    GENTLE_BRAKE = auto()
-    STRONG_BRAKE = auto()
-    EMERGENCY_BRAKE = auto()
+    """Actions that can be emitted by the automaton"""
+    BRAKE = "brake"
+    STOP = "stop"
+    THROTTLE_ACCELERATION = "throttle_acceleration"
+    ALERTING_DRIVER = "alerting_driver"
+    REMOVE_ALERT = "remove_alert"
+    STOP_THROTTLING = "stop_throttling"
+    STOP_BRAKING = "stop_braking"
+    BRAKE_TO_THROTTLE = "brake_to_throttle"
+    NONE = "_"  # No action
 
 
-@dataclass
-class StateVector:
-    """Sensor readings at a given time step"""
-    # Camera data
-    C_cam: float  # Camera confidence score
-    TTC_c: float  # Time-to-collision from camera
-    T_cam_detect: float  # Time camera has been detecting
-    T_cam_stale: float  # Time since last camera update
-    
-    # Fallback sensor (lidar/radar) data
-    S_fb: bool  # Fallback sensor detection flag
-    TTC_fb: float  # Time-to-collision from fallback
-    T_fb_detect: float  # Time fallback has been detecting
-    T_fb_stale: float  # Time since last fallback update
+class NoTransitionAvailableError(Exception):
+    """Raised when no valid transition exists from the current state"""
+    pass
 
 
-@dataclass
-class Thresholds:
-    """System thresholds and parameters"""
-    TH_C_c: float = 0.7  # Camera confidence threshold
-    TH_TTC_s: float = 2.5  # Safe TTC threshold
-    TH_TTC_r: float = 1.5  # Risky TTC threshold
-    TH_TTC_c: float = 0.8  # Critical TTC threshold
-    TH_T_detect: float = 0.15  # Temporal consistency threshold
-    TH_T_stale: float = 0.2  # Staleness threshold (max acceptable age)
-    
-    # Epsilon values for hysteresis
-    E_s: float = 0.2  # Safe epsilon
-    E_r: float = 0.2  # Risky epsilon
-    E_c: float = 0.1  # Critical epsilon
-    
-    def __post_init__(self):
-        """Validate threshold ordering to prevent overlaps"""
-        assert self.TH_TTC_c + self.E_c < self.TH_TTC_r - self.E_r, \
-            "Critical and risky ranges overlap"
-        assert self.TH_TTC_r + self.E_r < self.TH_TTC_s - self.E_s, \
-            "Risky and safe ranges overlap"
-        assert self.TH_T_stale > 0, "Staleness threshold must be positive"
-        assert self.TH_T_detect < self.TH_T_stale, \
-            "Detection time should be less than staleness threshold"
-
+# ============================================================================
+# PEDESTRIAN PROTECTION AUTOMATON
+# ============================================================================
 
 class PedestrianProtectionAutomaton:
     """
-    Finite State Automaton for pedestrian protection with dual sensor fusion
-    and staleness detection.
+    Hybrid automaton for pedestrian protection system.
     
-    Key invariants:
-    - Sensors must be fresh (not stale) to be considered available
-    - Invasive braking requires both sensors available with temporal consistency
-    - State transitions are deterministic based on sensor inputs
+    Manages state transitions based on:
+    - Detection confidence (B_C)
+    - Time-to-collision (B_TTC)
+    - Crossing status (B_cross)
+    - Staleness timers (s_d, s_c)
     """
     
-    def __init__(self, thresholds: Optional[Thresholds] = None):
-        self.th = thresholds or Thresholds()
+    def __init__(self):
+        """Initialize the automaton with default state and empty buffers"""
+        # Current state
         self.state = State.NORMAL
-        self.previous_state = State.NORMAL
         
-    def _avail_cam(self, data: StateVector) -> bool:
-        """
-        Camera availability: confidence above threshold, temporally stable, and fresh.
+        # Buffers (most recent element at index 0)
+        self.B_C: deque = deque(maxlen=N)  # Confidence buffer [0,1]
+        self.B_TTC: deque = deque(maxlen=N)  # Time-to-collision buffer (s)
+        self.B_cross: deque = deque(maxlen=N)  # Crossing status buffer {0,1}
         
-        This is a critical safety predicate - stale data is treated as unavailable.
-        """
-        return (data.C_cam >= self.th.TH_C_c and 
-                data.T_cam_detect > self.th.TH_T_detect and 
-                data.T_cam_stale < self.th.TH_T_stale)
-    
-    def _avail_fb(self, data: StateVector) -> bool:
-        """
-        Fallback sensor availability: detecting, temporally stable, and fresh.
+        # Staleness timers (ms)
+        self.s_d = 0  # Detection staleness
+        self.s_c = 0  # Crossing staleness
         
-        This is a critical safety predicate - stale data is treated as unavailable.
+        # Last step call timestamp (seconds)
+        self.last_step_call: Optional[float] = None
+    
+    # ========================================================================
+    # HELPER FUNCTIONS
+    # ========================================================================
+    
+    def _detected(self) -> bool:
+        """Check if pedestrian is detected based on confidence buffer"""
+        if len(self.B_C) == 0:
+            return False
+        count = sum(1 for c in self.B_C if c > TH_C)
+        return count >= DETECTION_CONSENSUS * N
+    
+    def _crossing(self) -> bool:
+        """Check if pedestrian is crossing based on crossing buffer"""
+        if len(self.B_cross) == 0:
+            return False
+        count = sum(self.B_cross)
+        return count >= CROSSING_CONSENSUS * N
+    
+    def _valid_d(self) -> bool:
+        """Check if detection data is valid (fresh or recently detected)"""
+        return self._detected() or self.s_d < TH_D_STALE
+    
+    def _valid_c(self) -> bool:
+        """Check if crossing data is valid (fresh or recently crossing)"""
+        return self._crossing() or self.s_c < TH_C_STALE
+    
+    def _s_distance(self) -> bool:
+        """Check if distance is safe"""
+        if len(self.B_TTC) == 0:
+            return True
+        count = sum(1 for ttc in self.B_TTC if ttc > TH_TTC_S)
+        return count >= S_DISTANCE_CONSENSUS * N
+    
+    def _s_r_distance(self) -> bool:
+        """Check if distance is safe-to-risky"""
+        if len(self.B_TTC) == 0:
+            return False
+        count = sum(1 for ttc in self.B_TTC if TH_TTC_R <= ttc < TH_TTC_S)
+        return count >= SR_DISTANCE_CONSENSUS * N
+    
+    def _r_c_distance(self) -> bool:
+        """Check if distance is risky-to-critical"""
+        if len(self.B_TTC) == 0:
+            return False
+        count = sum(1 for ttc in self.B_TTC if TH_TTC_C <= ttc < TH_TTC_R)
+        return count >= RC_DISTANCE_CONSENSUS * N
+    
+    def _c_distance(self) -> bool:
+        """Check if distance is critical"""
+        if len(self.B_TTC) == 0:
+            return False
+        count = sum(1 for ttc in self.B_TTC if ttc < TH_TTC_C)
+        return count >= C_DISTANCE_CONSENSUS * N
+    
+    # ========================================================================
+    # STATE TRANSITION LOGIC
+    # ========================================================================
+    
+    def _check_transitions(self) -> tuple[State, Action]:
         """
-        return (data.S_fb and 
-                data.T_fb_detect > self.th.TH_T_detect and 
-                data.T_fb_stale < self.th.TH_T_stale)
-    
-    def _no_detection(self, data: StateVector) -> bool:
-        """No available detection from either sensor"""
-        return not self._avail_cam(data) and not self._avail_fb(data)
-    
-    def _normal_cam_only(self, data: StateVector) -> bool:
-        """Camera only available, safe distance"""
-        return (self._avail_cam(data) and 
-                not self._avail_fb(data) and 
-                data.TTC_c > self.th.TH_TTC_s + self.th.E_s)
-    
-    def _normal_fb_only(self, data: StateVector) -> bool:
-        """Fallback only available, safe distance"""
-        return (not self._avail_cam(data) and 
-                self._avail_fb(data) and 
-                data.TTC_fb > self.th.TH_TTC_s + self.th.E_s)
-    
-    def _normal_both(self, data: StateVector) -> bool:
-        """Both sensors available, safe distance"""
-        return (self._avail_cam(data) and 
-                self._avail_fb(data) and 
-                data.TTC_c > self.th.TH_TTC_s and 
-                data.TTC_fb > self.th.TH_TTC_s + self.th.E_s)
-    
-    def _safe_warning_cam_only(self, data: StateVector) -> bool:
-        """Camera only available, warning range"""
-        return (self._avail_cam(data) and 
-                not self._avail_fb(data) and 
-                self.th.TH_TTC_r - self.th.E_r <= data.TTC_c <= self.th.TH_TTC_s + self.th.E_s)
-    
-    def _safe_warning_fb_only(self, data: StateVector) -> bool:
-        """Fallback only available, warning range"""
-        return (not self._avail_cam(data) and 
-                self._avail_fb(data) and 
-                self.th.TH_TTC_r - self.th.E_r <= data.TTC_fb <= self.th.TH_TTC_s + self.th.E_s)
-    
-    def _safe_warning_both(self, data: StateVector) -> bool:
-        """Both sensors available, warning range"""
-        min_ttc = min(data.TTC_c, data.TTC_fb)
-        return (self._avail_cam(data) and 
-                self._avail_fb(data) and 
-                self.th.TH_TTC_r - self.th.E_r <= min_ttc <= self.th.TH_TTC_s + self.th.E_s)
-    
-    def _risky_slowdown_cam_only(self, data: StateVector) -> bool:
-        """Camera only available, risky range"""
-        return (self._avail_cam(data) and 
-                not self._avail_fb(data) and 
-                self.th.TH_TTC_c - self.th.E_c <= data.TTC_c < self.th.TH_TTC_r + self.th.E_r)
-    
-    def _risky_slowdown_fb_only(self, data: StateVector) -> bool:
-        """Fallback only available, risky range"""
-        return (not self._avail_cam(data) and 
-                self._avail_fb(data) and 
-                self.th.TH_TTC_c - self.th.E_c <= data.TTC_fb < self.th.TH_TTC_r + self.th.E_r)
-    
-    def _critical_slowdown_cam_only(self, data: StateVector) -> bool:
-        """Camera only available, critical range"""
-        return (self._avail_cam(data) and 
-                not self._avail_fb(data) and 
-                data.TTC_c < self.th.TH_TTC_c + self.th.E_c)
-    
-    def _critical_slowdown_fb_only(self, data: StateVector) -> bool:
-        """Fallback only available, critical range"""
-        return (not self._avail_cam(data) and 
-                self._avail_fb(data) and 
-                data.TTC_fb < self.th.TH_TTC_c + self.th.E_c)
-    
-    def _soft_braking(self, data: StateVector) -> bool:
-        """Both sensors available and agree, risky range"""
-        min_ttc = min(data.TTC_c, data.TTC_fb)
-        return (self._avail_cam(data) and 
-                self._avail_fb(data) and 
-                self.th.TH_TTC_c - self.th.E_c <= min_ttc < self.th.TH_TTC_r + self.th.E_r)
-    
-    def _emergency_braking(self, data: StateVector) -> bool:
-        """Both sensors available and agree, critical range"""
-        min_ttc = min(data.TTC_c, data.TTC_fb)
-        return (self._avail_cam(data) and 
-                self._avail_fb(data) and 
-                min_ttc < self.th.TH_TTC_c + self.th.E_c)
-    
-    def _inv_normal(self, data: StateVector) -> bool:
-        """Invariant for Normal state"""
-        return (self._no_detection(data) or 
-                self._normal_cam_only(data) or 
-                self._normal_fb_only(data) or 
-                self._normal_both(data))
-    
-    def _inv_safe_warning(self, data: StateVector) -> bool:
-        """Invariant for SafeWarning state"""
-        return (self._safe_warning_cam_only(data) or 
-                self._safe_warning_fb_only(data) or 
-                self._safe_warning_both(data))
-    
-    def _inv_risky_slowdown(self, data: StateVector) -> bool:
-        """Invariant for RiskySlowdown state"""
-        return (self._risky_slowdown_cam_only(data) or 
-                self._risky_slowdown_fb_only(data))
-    
-    def _inv_critical_slowdown(self, data: StateVector) -> bool:
-        """Invariant for CriticalSlowdown state"""
-        return (self._critical_slowdown_cam_only(data) or 
-                self._critical_slowdown_fb_only(data))
-    
-    def _inv_soft_braking(self, data: StateVector) -> bool:
-        """Invariant for SoftBraking state"""
-        return self._soft_braking(data)
-    
-    def _inv_emergency_braking(self, data: StateVector) -> bool:
-        """Invariant for EmergencyBraking state"""
-        return self._emergency_braking(data)
-    
-    def compute_next_state(self, data: StateVector) -> State:
+        Check all possible transitions from current state.
+        Returns the new state and action to take.
+        Raises NoTransitionAvailableError if no valid transition exists.
         """
-        Compute next state based on current state and sensor data.
+        valid_d = self._valid_d()
+        valid_c = self._valid_c()
+        s_dist = self._s_distance()
+        sr_dist = self._s_r_distance()
+        rc_dist = self._r_c_distance()
+        c_dist = self._c_distance()
         
-        This method is deterministic and implements the complete transition table.
-        """
-        # Check invariants in priority order (most critical first)
-        if self._inv_emergency_braking(data):
-            return State.EMERGENCY_BRAKING
-        elif self._inv_soft_braking(data):
-            return State.SOFT_BRAKING
-        elif self._inv_critical_slowdown(data):
-            return State.CRITICAL_SLOWDOWN
-        elif self._inv_risky_slowdown(data):
-            return State.RISKY_SLOWDOWN
-        elif self._inv_safe_warning(data):
-            return State.SAFE_WARNING
-        elif self._inv_normal(data):
-            return State.NORMAL
-        else:
-            # Should never reach here if invariants are complete
-            # Default to most conservative safe state
-            return State.CRITICAL_SLOWDOWN
+        # Transition logic based on current state
+        if self.state == State.NORMAL:
+            # e1: Stay in Normal
+            if not valid_d or s_dist:
+                return State.NORMAL, Action.NONE
+            # e2: To SafeWarning
+            if valid_d and not valid_c and sr_dist:
+                return State.SAFE_WARNING, Action.ALERTING_DRIVER
+            # e3: To Throttling
+            if valid_d and ((not valid_c and rc_dist) or (valid_c and sr_dist)):
+                return State.THROTTLING, Action.THROTTLE_ACCELERATION
+            # e4: To CriticalSlowdown
+            if valid_d and not valid_c and c_dist:
+                return State.CRITICAL_SLOWDOWN, Action.BRAKE
+            # e5: To SoftBraking
+            if valid_d and valid_c and rc_dist:
+                return State.SOFT_BRAKING, Action.BRAKE
+            # e6: To EmergencyBraking
+            if valid_d and valid_c and c_dist:
+                return State.EMERGENCY_BRAKING, Action.STOP
+        
+        elif self.state == State.SAFE_WARNING:
+            # e7: To Normal
+            if not valid_d or s_dist:
+                return State.NORMAL, Action.NONE
+            # e8: Stay in SafeWarning
+            if valid_d and not valid_c and sr_dist:
+                return State.SAFE_WARNING, Action.NONE
+            # e9: To Throttling
+            if valid_d and ((not valid_c and rc_dist) or (valid_c and sr_dist)):
+                return State.THROTTLING, Action.THROTTLE_ACCELERATION
+            # e10: To CriticalSlowdown
+            if valid_d and not valid_c and c_dist:
+                return State.CRITICAL_SLOWDOWN, Action.BRAKE
+            # e11: To SoftBraking
+            if valid_d and valid_c and rc_dist:
+                return State.SOFT_BRAKING, Action.BRAKE
+            # e12: To EmergencyBraking
+            if valid_d and valid_c and c_dist:
+                return State.EMERGENCY_BRAKING, Action.STOP
+        
+        elif self.state == State.THROTTLING:
+            # e13: To Normal
+            if not valid_d or s_dist:
+                return State.NORMAL, Action.STOP_THROTTLING
+            # e14: To SafeWarning
+            if valid_d and not valid_c and sr_dist:
+                return State.SAFE_WARNING, Action.STOP_THROTTLING
+            # e15: Stay in Throttling
+            if valid_d and ((not valid_c and rc_dist) or (valid_c and sr_dist)):
+                return State.THROTTLING, Action.NONE
+            # e16: To CriticalSlowdown
+            if valid_d and not valid_c and c_dist:
+                return State.CRITICAL_SLOWDOWN, Action.BRAKE
+            # e17: To SoftBraking
+            if valid_d and valid_c and rc_dist:
+                return State.SOFT_BRAKING, Action.BRAKE
+            # e18: To EmergencyBraking
+            if valid_d and valid_c and c_dist:
+                return State.EMERGENCY_BRAKING, Action.STOP
+        
+        elif self.state == State.CRITICAL_SLOWDOWN:
+            # e19: To Normal
+            if not valid_d or s_dist:
+                return State.NORMAL, Action.STOP_BRAKING
+            # e20: To SafeWarning
+            if valid_d and not valid_c and sr_dist:
+                return State.SAFE_WARNING, Action.STOP_BRAKING
+            # e21: To Throttling
+            if (not valid_c and rc_dist) or (valid_c and sr_dist):
+                return State.THROTTLING, Action.BRAKE_TO_THROTTLE
+            # e22: Stay in CriticalSlowdown
+            if valid_d and not valid_c and c_dist:
+                return State.CRITICAL_SLOWDOWN, Action.NONE
+            # e23: To SoftBraking
+            if valid_d and valid_c and rc_dist:
+                return State.SOFT_BRAKING, Action.BRAKE
+            # e24: To EmergencyBraking
+            if valid_d and valid_c and c_dist:
+                return State.EMERGENCY_BRAKING, Action.STOP
+        
+        elif self.state == State.SOFT_BRAKING:
+            # e25: To Normal
+            if not valid_d or s_dist:
+                return State.NORMAL, Action.STOP_BRAKING
+            # e26: To SafeWarning
+            if valid_d and not valid_c and sr_dist:
+                return State.SAFE_WARNING, Action.STOP_BRAKING
+            # e27: Stay in SoftBraking
+            if valid_d and valid_c and rc_dist:
+                return State.SOFT_BRAKING, Action.NONE
+            # e28: To EmergencyBraking
+            if valid_d and valid_c and c_dist:
+                return State.EMERGENCY_BRAKING, Action.STOP
+        
+        elif self.state == State.EMERGENCY_BRAKING:
+            # e29: To Normal
+            if not valid_d or not valid_c or s_dist:
+                return State.NORMAL, Action.NONE
+        
+        # No transition available - this should not happen with proper invariants
+        raise NoTransitionAvailableError(
+            f"No valid transition available from state {self.state.value}. "
+            f"State invariants may be violated. "
+            f"valid_d={valid_d}, valid_c={valid_c}, "
+            f"s_dist={s_dist}, sr_dist={sr_dist}, rc_dist={rc_dist}, c_dist={c_dist}"
+        )
     
-    def step(self, data: StateVector) -> tuple[State, Action]:
+    # ========================================================================
+    # PUBLIC INTERFACE
+    # ========================================================================
+    
+    def update_data(self, confidence: Optional[float] = None, 
+                   ttc: Optional[float] = None, 
+                   is_crossing: Optional[bool] = None):
+        """
+        Update buffers with new sensor data.
+        
+        Args:
+            confidence: Detection confidence [0, 1]
+            ttc: Time to collision (seconds)
+            is_crossing: Whether pedestrian is crossing
+        """
+        if confidence is not None:
+            self.B_C.appendleft(confidence)
+        
+        if ttc is not None:
+            self.B_TTC.appendleft(ttc)
+        
+        if is_crossing is not None:
+            self.B_cross.appendleft(1 if is_crossing else 0)
+    
+    def step(self) -> Action:
         """
         Execute one step of the automaton.
         
-        Returns: (new_state, action)
+        Computes dt as the difference between now and the last step call.
+        Updates staleness timers and checks for state transitions.
+        
+        Returns:
+            Action to be taken (or Action.NONE if no state change)
+            
+        Raises:
+            NoTransitionAvailableError: If no valid transition exists
         """
-        self.previous_state = self.state
-        self.state = self.compute_next_state(data)
-        action = self.get_action(self.state)
-        return self.state, action
+        # Get current time
+        current_time = time.time()
+        
+        # Compute dt (seconds)
+        if self.last_step_call is None:
+            dt = 0.0  # First call, no time has passed
+        else:
+            dt = current_time - self.last_step_call
+        
+        # Update last step call time
+        self.last_step_call = current_time
+        
+        # Update staleness timers (convert dt from seconds to ms)
+        dt_ms = dt * 1000
+        
+        # Update detection staleness
+        if self._detected():
+            self.s_d = 0
+        else:
+            self.s_d = min(self.s_d + dt_ms, MAX_STALE)
+        
+        # Update crossing staleness
+        if self._crossing():
+            self.s_c = 0
+        else:
+            self.s_c = min(self.s_c + dt_ms, MAX_STALE)
+        
+        # Check for state transitions
+        new_state, action = self._check_transitions()
+        
+        # Update state
+        self.state = new_state
+        
+        return action
     
-    @staticmethod
-    def get_action(state: State) -> Action:
-        """Map state to action"""
-        action_map = {
-            State.NORMAL: Action.NONE,
-            State.SAFE_WARNING: Action.WARNING,
-            State.RISKY_SLOWDOWN: Action.THROTTLE_REDUCE,
-            State.CRITICAL_SLOWDOWN: Action.GENTLE_BRAKE,
-            State.SOFT_BRAKING: Action.STRONG_BRAKE,
-            State.EMERGENCY_BRAKING: Action.EMERGENCY_BRAKE,
+    def get_status(self) -> dict:
+        """
+        Get complete status of the automaton.
+        
+        Returns:
+            Dictionary containing state, buffers, and timers
+        """
+        return {
+            'state': self.state.value,
+            'buffers': {
+                'B_C': list(self.B_C),
+                'B_TTC': list(self.B_TTC),
+                'B_cross': list(self.B_cross)
+            },
+            'staleness': {
+                's_d': self.s_d,
+                's_c': self.s_c
+            },
+            'validity': {
+                'valid_d': self._valid_d(),
+                'valid_c': self._valid_c(),
+                'detected': self._detected(),
+                'crossing': self._crossing()
+            }
         }
-        return action_map[state]
-
-
-# ============================================================================
-# CROSSHAIR VERIFICATION PROPERTIES
-# ============================================================================
-
-def make_valid_sensor_data(
-    C_cam: float,
-    TTC_c: float,
-    T_cam_detect: float,
-    T_cam_stale: float,
-    S_fb: bool,
-    TTC_fb: float,
-    T_fb_detect: float,
-    T_fb_stale: float
-) -> StateVector:
-    """Helper to create valid sensor data with preconditions for CrossHair."""
-    return StateVector(
-        C_cam=C_cam,
-        TTC_c=TTC_c,
-        T_cam_detect=T_cam_detect,
-        T_cam_stale=T_cam_stale,
-        S_fb=S_fb,
-        TTC_fb=TTC_fb,
-        T_fb_detect=T_fb_detect,
-        T_fb_stale=T_fb_stale
-    )
-
-
-# ============================================================================
-# ORIGINAL PROPERTIES (Updated for Staleness)
-# ============================================================================
-
-def check_P1_no_unintended_braking(
-    C_cam: float,
-    TTC_c: float,
-    T_cam_detect: float,
-    T_cam_stale: float,
-    S_fb: bool,
-    TTC_fb: float,
-    T_fb_detect: float,
-    T_fb_stale: float
-) -> bool:
-    """
-    P1: No Unintended Braking
-    
-    Invasive braking only occurs when both sensors are available
-    (fresh, confident, temporally stable).
-    
-    pre: C_cam >= 0.0 and C_cam <= 1.0
-    pre: TTC_c >= 0.0 and TTC_c <= 10.0
-    pre: T_cam_detect >= 0.0 and T_cam_detect <= 5.0
-    pre: T_cam_stale >= 0.0 and T_cam_stale <= 1.0
-    pre: TTC_fb >= 0.0 and TTC_fb <= 10.0
-    pre: T_fb_detect >= 0.0 and T_fb_detect <= 5.0
-    pre: T_fb_stale >= 0.0 and T_fb_stale <= 1.0
-    post: _
-    """
-    automaton = PedestrianProtectionAutomaton()
-    data = make_valid_sensor_data(C_cam, TTC_c, T_cam_detect, T_cam_stale,
-                                   S_fb, TTC_fb, T_fb_detect, T_fb_stale)
-    state, _ = automaton.step(data)
-    
-    if state in [State.EMERGENCY_BRAKING, State.SOFT_BRAKING]:
-        return automaton._avail_cam(data) and automaton._avail_fb(data)
-    return True
-
-
-def check_P3_emergency_braking_necessity(
-    C_cam: float,
-    TTC_c: float,
-    T_cam_detect: float,
-    T_cam_stale: float,
-    S_fb: bool,
-    TTC_fb: float,
-    T_fb_detect: float,
-    T_fb_stale: float
-) -> bool:
-    """
-    P3: Emergency Braking Necessity
-    
-    When both sensors are available and confirm imminent collision,
-    emergency braking must activate.
-    
-    pre: C_cam >= 0.0 and C_cam <= 1.0
-    pre: TTC_c >= 0.0 and TTC_c <= 10.0
-    pre: T_cam_detect >= 0.0 and T_cam_detect <= 5.0
-    pre: T_cam_stale >= 0.0 and T_cam_stale <= 1.0
-    pre: TTC_fb >= 0.0 and TTC_fb <= 10.0
-    pre: T_fb_detect >= 0.0 and T_fb_detect <= 5.0
-    pre: T_fb_stale >= 0.0 and T_fb_stale <= 1.0
-    post: _
-    """
-    automaton = PedestrianProtectionAutomaton()
-    th = automaton.th
-    data = make_valid_sensor_data(C_cam, TTC_c, T_cam_detect, T_cam_stale,
-                                   S_fb, TTC_fb, T_fb_detect, T_fb_stale)
-    
-    # Check precondition for emergency with availability
-    min_ttc = min(TTC_c, TTC_fb)
-    emergency_conditions = (
-        automaton._avail_cam(data) and 
-        automaton._avail_fb(data) and 
-        min_ttc < th.TH_TTC_c + th.E_c
-    )
-    
-    if emergency_conditions:
-        state, _ = automaton.step(data)
-        return state == State.EMERGENCY_BRAKING
-    return True
-
-
-def check_P4_no_spurious_emergency_from_single_sensor(
-    C_cam: float,
-    TTC_c: float,
-    T_cam_detect: float,
-    T_cam_stale: float,
-    S_fb: bool,
-    TTC_fb: float,
-    T_fb_detect: float,
-    T_fb_stale: float
-) -> bool:
-    """
-    P4: No Spurious Emergency from Single Sensor
-    
-    Emergency braking never occurs with only one sensor available.
-    
-    pre: C_cam >= 0.0 and C_cam <= 1.0
-    pre: TTC_c >= 0.0 and TTC_c <= 10.0
-    pre: T_cam_detect >= 0.0 and T_cam_detect <= 5.0
-    pre: T_cam_stale >= 0.0 and T_cam_stale <= 1.0
-    pre: TTC_fb >= 0.0 and TTC_fb <= 10.0
-    pre: T_fb_detect >= 0.0 and T_fb_detect <= 5.0
-    pre: T_fb_stale >= 0.0 and T_fb_stale <= 1.0
-    post: _
-    """
-    automaton = PedestrianProtectionAutomaton()
-    data = make_valid_sensor_data(C_cam, TTC_c, T_cam_detect, T_cam_stale,
-                                   S_fb, TTC_fb, T_fb_detect, T_fb_stale)
-    state, _ = automaton.step(data)
-    
-    if state == State.EMERGENCY_BRAKING:
-        # Both sensors must be available
-        return automaton._avail_cam(data) and automaton._avail_fb(data)
-    return True
-
-
-def check_P8_single_active_state(
-    C_cam: float,
-    TTC_c: float,
-    T_cam_detect: float,
-    T_cam_stale: float,
-    S_fb: bool,
-    TTC_fb: float,
-    T_fb_detect: float,
-    T_fb_stale: float
-) -> bool:
-    """
-    P8: Single Active State
-    
-    At least one state invariant is true at any time (completeness).
-    
-    pre: C_cam >= 0.0 and C_cam <= 1.0
-    pre: TTC_c >= 0.0 and TTC_c <= 10.0
-    pre: T_cam_detect >= 0.0 and T_cam_detect <= 5.0
-    pre: T_cam_stale >= 0.0 and T_cam_stale <= 1.0
-    pre: TTC_fb >= 0.0 and TTC_fb <= 10.0
-    pre: T_fb_detect >= 0.0 and T_fb_detect <= 5.0
-    pre: T_fb_stale >= 0.0 and T_fb_stale <= 1.0
-    post: _
-    """
-    automaton = PedestrianProtectionAutomaton()
-    data = make_valid_sensor_data(C_cam, TTC_c, T_cam_detect, T_cam_stale,
-                                   S_fb, TTC_fb, T_fb_detect, T_fb_stale)
-    
-    # At least one invariant must be satisfied (completeness)
-    inv_count = sum([
-        automaton._inv_normal(data),
-        automaton._inv_safe_warning(data),
-        automaton._inv_risky_slowdown(data),
-        automaton._inv_critical_slowdown(data),
-        automaton._inv_soft_braking(data),
-        automaton._inv_emergency_braking(data),
-    ])
-    
-    return inv_count >= 1
-
-
-def check_P10_sensor_agreement_for_braking(
-    C_cam: float,
-    TTC_c: float,
-    T_cam_detect: float,
-    T_cam_stale: float,
-    S_fb: bool,
-    TTC_fb: float,
-    T_fb_detect: float,
-    T_fb_stale: float
-) -> bool:
-    """
-    P10: Sensor Agreement for Crossing Detection
-    
-    Soft and emergency braking only when both sensors are available.
-    
-    pre: C_cam >= 0.0 and C_cam <= 1.0
-    pre: TTC_c >= 0.0 and TTC_c <= 10.0
-    pre: T_cam_detect >= 0.0 and T_cam_detect <= 5.0
-    pre: T_cam_stale >= 0.0 and T_cam_stale <= 1.0
-    pre: TTC_fb >= 0.0 and TTC_fb <= 10.0
-    pre: T_fb_detect >= 0.0 and T_fb_detect <= 5.0
-    pre: T_fb_stale >= 0.0 and T_fb_stale <= 1.0
-    post: _
-    """
-    automaton = PedestrianProtectionAutomaton()
-    data = make_valid_sensor_data(C_cam, TTC_c, T_cam_detect, T_cam_stale,
-                                   S_fb, TTC_fb, T_fb_detect, T_fb_stale)
-    state, _ = automaton.step(data)
-    
-    if state in [State.SOFT_BRAKING, State.EMERGENCY_BRAKING]:
-        return automaton._avail_cam(data) and automaton._avail_fb(data)
-    return True
-
-
-# ============================================================================
-# NEW STALENESS-SPECIFIC PROPERTIES
-# ============================================================================
-
-def check_P_stale1_no_braking_with_stale_data(
-    C_cam: float,
-    TTC_c: float,
-    T_cam_detect: float,
-    T_cam_stale: float,
-    S_fb: bool,
-    TTC_fb: float,
-    T_fb_detect: float,
-    T_fb_stale: float
-) -> bool:
-    """
-    P_STALE1: No Braking With Stale Data
-    
-    Invasive braking never occurs when either sensor has stale data.
-    
-    pre: C_cam >= 0.0 and C_cam <= 1.0
-    pre: TTC_c >= 0.0 and TTC_c <= 10.0
-    pre: T_cam_detect >= 0.0 and T_cam_detect <= 5.0
-    pre: T_cam_stale >= 0.0 and T_cam_stale <= 1.0
-    pre: TTC_fb >= 0.0 and TTC_fb <= 10.0
-    pre: T_fb_detect >= 0.0 and T_fb_detect <= 5.0
-    pre: T_fb_stale >= 0.0 and T_fb_stale <= 1.0
-    post: _
-    """
-    automaton = PedestrianProtectionAutomaton()
-    th = automaton.th
-    data = make_valid_sensor_data(C_cam, TTC_c, T_cam_detect, T_cam_stale,
-                                   S_fb, TTC_fb, T_fb_detect, T_fb_stale)
-    state, _ = automaton.step(data)
-    
-    if state in [State.SOFT_BRAKING, State.EMERGENCY_BRAKING]:
-        # Both sensors must have fresh data
-        return (data.T_cam_stale < th.TH_T_stale and 
-                data.T_fb_stale < th.TH_T_stale)
-    return True
-
-
-def check_P_stale2_stale_sensor_treated_as_unavailable(
-    C_cam: float,
-    TTC_c: float,
-    T_cam_detect: float,
-    T_cam_stale: float,
-    S_fb: bool,
-    TTC_fb: float,
-    T_fb_detect: float,
-    T_fb_stale: float
-) -> bool:
-    """
-    P_STALE2: Stale Sensor Treated as Unavailable
-    
-    If a sensor has stale data, it's treated as unavailable even if
-    it meets other criteria (confidence, detection time).
-    
-    pre: C_cam >= 0.0 and C_cam <= 1.0
-    pre: TTC_c >= 0.0 and TTC_c <= 10.0
-    pre: T_cam_detect >= 0.0 and T_cam_detect <= 5.0
-    pre: T_cam_stale >= 0.0 and T_cam_stale <= 1.0
-    pre: TTC_fb >= 0.0 and TTC_fb <= 10.0
-    pre: T_fb_detect >= 0.0 and T_fb_detect <= 5.0
-    pre: T_fb_stale >= 0.0 and T_fb_stale <= 1.0
-    post: _
-    """
-    automaton = PedestrianProtectionAutomaton()
-    th = automaton.th
-    data = make_valid_sensor_data(C_cam, TTC_c, T_cam_detect, T_cam_stale,
-                                   S_fb, TTC_fb, T_fb_detect, T_fb_stale)
-    
-    # If camera data is stale, camera should not be available
-    if data.T_cam_stale >= th.TH_T_stale:
-        if not automaton._avail_cam(data):
-            return True  # Correctly treated as unavailable
-        else:
-            return False  # Bug: stale sensor treated as available
-    
-    # If fallback data is stale, fallback should not be available
-    if data.T_fb_stale >= th.TH_T_stale:
-        if not automaton._avail_fb(data):
-            return True  # Correctly treated as unavailable
-        else:
-            return False  # Bug: stale sensor treated as available
-    
-    return True
-
-
-def check_P_stale3_fresh_data_required_for_availability(
-    C_cam: float,
-    TTC_c: float,
-    T_cam_detect: float,
-    T_cam_stale: float,
-    S_fb: bool,
-    TTC_fb: float,
-    T_fb_detect: float,
-    T_fb_stale: float
-) -> bool:
-    """
-    P_STALE3: Fresh Data Required for Availability
-    
-    A sensor can only be available if its data is fresh.
-    This is the converse of P_STALE2.
-    
-    pre: C_cam >= 0.0 and C_cam <= 1.0
-    pre: TTC_c >= 0.0 and TTC_c <= 10.0
-    pre: T_cam_detect >= 0.0 and T_cam_detect <= 5.0
-    pre: T_cam_stale >= 0.0 and T_cam_stale <= 1.0
-    pre: TTC_fb >= 0.0 and TTC_fb <= 10.0
-    pre: T_fb_detect >= 0.0 and T_fb_detect <= 5.0
-    pre: T_fb_stale >= 0.0 and T_fb_stale <= 1.0
-    post: _
-    """
-    automaton = PedestrianProtectionAutomaton()
-    th = automaton.th
-    data = make_valid_sensor_data(C_cam, TTC_c, T_cam_detect, T_cam_stale,
-                                   S_fb, TTC_fb, T_fb_detect, T_fb_stale)
-    
-    # If camera is available, its data must be fresh
-    if automaton._avail_cam(data):
-        if data.T_cam_stale >= th.TH_T_stale:
-            return False  # Bug: available despite stale data
-    
-    # If fallback is available, its data must be fresh
-    if automaton._avail_fb(data):
-        if data.T_fb_stale >= th.TH_T_stale:
-            return False  # Bug: available despite stale data
-    
-    return True
-
-
-# def check_P_stale4_graceful_degradation_on_staleness(
-#     C_cam: float,
-#     TTC_c: float,
-#     T_cam_detect: float,
-#     T_cam_stale: float,
-#     S_fb: bool,
-#     TTC_fb: float,
-#     T_fb_detect: float,
-#     T_fb_stale: float
-# ) -> bool:
-#     """
-#     P_STALE4: Graceful Degradation on Staleness
-    
-#     If one sensor becomes stale during braking, the system should
-#     not immediately de-escalate to a less critical state.
-#     (Conservative safety behavior)
-    
-#     pre: C_cam >= 0.0 and C_cam <= 1.0
-#     pre: TTC_c >= 0.0 and TTC_c <= 10.0
-#     pre: T_cam_detect >= 0.0
