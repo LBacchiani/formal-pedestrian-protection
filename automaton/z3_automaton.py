@@ -103,9 +103,7 @@ def threshold_constraints():
         # MAX_STALE should be longer than detection staleness threshold
         MAX_STALE >= N * CAMERA_FREQ,
         
-        # Camera frequency is positive
-        CAMERA_FREQ > 0,
-        
+                
         # NO_TTC is a large sentinel value
         NO_TTC > TH_TTC_S + 1
     ]

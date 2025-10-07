@@ -25,13 +25,14 @@ MIN_VAL = 0.8
 MAX_STALE = 1000  # Maximum staleness (ms)
 MAX_UNCERTAIN = 2000  # Handover timeout (ms)
 
-DETECTION_CONSENSUS = CROSSING_CONSENSUS = 0.7
 S_DISTANCE_CONSENSUS = 0.8
 SR_DISTANCE_CONSENSUS = 0.6
 RC_DISTANCE_CONSENSUS = 0.4
 C_DISTANCE_CONSENSUS = 0.2
 NO_TTC = 10000000
 CAMERA_FREQ = 100  # Camera frequency (ms)
+RT_H_VAL = 700 # Reaction time (ms)
+RT_WINDOW_FRAMES = int(RT_H_VAL / CAMERA_FREQ_VAL)   
 
 
 # ============================================================================
@@ -108,14 +109,14 @@ class PedestrianProtectionAutomaton:
         if len(self.B_C) == 0:
             return False
         count = sum(1 for c in self.B_C if c > TH_C)
-        return count >= DETECTION_CONSENSUS * N
+        return count >= RT_HALF_FRAMES
     
     def _crossing(self) -> bool:
         """Check if pedestrian is crossing based on crossing buffer"""
         if len(self.B_cross) == 0:
             return False
         count = sum(self.B_cross)
-        return count >= CROSSING_CONSENSUS * N
+        return count >= RT_HALF_FRAMES
     
     def _valid_d(self) -> bool:
         """Check if detection data is valid (fresh or recently detected)"""
