@@ -11,51 +11,52 @@ from z3 import *
 # STRUCTURAL CONSTANTS (Python - define the algorithm structure)
 # ============================================================================
 
+#ASSUMPTIONS:
 N = 10  # Buffer size
+RT_H_VAL = 700 # Reaction time (ms)
+CAMERA_FREQ_VAL = 100  # Camera frequency (ms)
+MAX_UNCERTAIN_VAL = 2000 # Handover timeout (ms)
+
+
+
 
 # Consensus thresholds (percentage of buffer that must agree)
-DETECTION_CONSENSUS = 0.7
-CROSSING_CONSENSUS = 0.7
-S_DISTANCE_CONSENSUS = 0.8
-SR_DISTANCE_CONSENSUS = 0.6
-RC_DISTANCE_CONSENSUS = 0.4
-C_DISTANCE_CONSENSUS = 0.2
+S_DISTANCE_CONSENSUS = Real("S_DISTANCE_CONSENSUS") #0.8
+SR_DISTANCE_CONSENSUS = Real("SR_DISTANCE_CONSENSUS") #0.6
+RC_DISTANCE_CONSENSUS = Real("RC_DISTANCE_CONSENSUS") #0.4
+C_DISTANCE_CONSENSUS = Real("C_DISTANCE_CONSENSUS") #0.2
 
 # ============================================================================
 # SAFETY THRESHOLDS (Z3 - can be verified parametrically)
 # ============================================================================
 
 # Python values (for computation)
-TH_C_VAL = 0.5
-TH_D_STALE_VAL = 200
-TH_C_STALE_VAL = 200
-TH_TTC_S_VAL = 5.0
-TH_TTC_R_VAL = 3.0
-TH_TTC_C_VAL = 1.5
-MIN_VAL_VAL = 0.8
-MAX_STALE_VAL = 1000
-MAX_UNCERTAIN_VAL = 2000
-NO_TTC_VAL = 10000000
-CAMERA_FREQ_VAL = 100
 
-# Z3 constants (for SMT solving)
-TH_C = RealVal(TH_C_VAL)  # Threshold for certain detection (confidence)
-TH_D_STALE = RealVal(TH_D_STALE_VAL)  # Threshold for detection stale data (ms)
-TH_C_STALE = RealVal(TH_C_STALE_VAL)  # Threshold for crossing stale data (ms)
+
+
+# Z3 symbolic values (for SMT solving)
+TH_C = Real("TH_C_VAL")  # Threshold for certain detection (confidence)
+TH_D_STALE = Real("TH_D_STALE_VAL")  # Threshold for detection stale data (ms)
+TH_C_STALE = Real("TH_C_STALE_VAL")  # Threshold for crossing stale data (ms)
 
 # Time-to-collision thresholds (seconds)
-TH_TTC_S = RealVal(TH_TTC_S_VAL)  # Safe TTC threshold
-TH_TTC_R = RealVal(TH_TTC_R_VAL)  # Risky TTC threshold
-TH_TTC_C = RealVal(TH_TTC_C_VAL)  # Critical TTC threshold
-MIN_VAL = RealVal(MIN_VAL_VAL)  # Minimum validation threshold
+TH_TTC_S = Real("TH_TTC_S_VAL")  # Safe TTC threshold
+TH_TTC_R = Real("TH_TTC_R_VAL")  # Risky TTC threshold
+TH_TTC_C = Real("TH_TTC_C_VAL")  # Critical TTC threshold
+MIN_VAL = Real("MIN_VAL_VAL")  # Minimum validation threshold
 
 # Staleness upper bounds
-MAX_STALE = RealVal(MAX_STALE_VAL)  # Maximum staleness (ms)
+MAX_STALE = Real("MAX_STALE_VAL")  # Maximum staleness (ms)
 MAX_UNCERTAIN = RealVal(MAX_UNCERTAIN_VAL)  # Handover timeout (ms)
 
 # Sensor parameters
-NO_TTC = RealVal(NO_TTC_VAL)  # No TTC value (pedestrian not detected)
+NO_TTC = Real("NO_TTC_VAL")  # No TTC value (pedestrian not detected)
 CAMERA_FREQ = RealVal(CAMERA_FREQ_VAL)  # Camera frequency (ms)
+RT_H = RealVal(RT_H_VAL) # Reaction time (ms)
+RT_WINDOW_FRAMES = int(RT_H_VAL / CAMERA_FREQ_VAL)               # Full reaction window (frames)
+RT_HALF_FRAMES = max(1, int(RT_WINDOW_FRAMES / 2))               # Half reaction window (minimum 1)
+
+
 
 # ============================================================================
 # THRESHOLD SANITY CONSTRAINTS
@@ -71,13 +72,22 @@ def threshold_constraints():
         TH_TTC_C < TH_TTC_R,
         TH_TTC_R < TH_TTC_S,
         TH_TTC_C > 0,
+
+        C_DISTANCE_CONSENSUS > 0, C_DISTANCE_CONSENSUS < 1,
+        RC_DISTANCE_CONSENSUS > 0, RC_DISTANCE_CONSENSUS < 1,
+        SR_DISTANCE_CONSENSUS > 0, SR_DISTANCE_CONSENSUS < 1,
+        S_DISTANCE_CONSENSUS > 0, S_DISTANCE_CONSENSUS < 1,
         
+        ToInt(S_DISTANCE_CONSENSUS * N) > ToInt(SR_DISTANCE_CONSENSUS * N),
+        ToInt(SR_DISTANCE_CONSENSUS * N) > ToInt(RC_DISTANCE_CONSENSUS * N),
+        ToInt(RC_DISTANCE_CONSENSUS * N) > ToInt(C_DISTANCE_CONSENSUS * N),
+                
         # Confidence threshold is a probability
         TH_C >= 0,
         TH_C <= 1,
         
         # MIN_VAL is a probability
-        MIN_VAL >= 0,
+        MIN_VAL >= 0.8,
         MIN_VAL <= 1,
         
         # Staleness thresholds are positive
@@ -91,14 +101,13 @@ def threshold_constraints():
         MAX_UNCERTAIN > TH_C_STALE,
         
         # MAX_STALE should be longer than detection staleness threshold
-        MAX_STALE >= TH_D_STALE,
-        MAX_STALE >= TH_C_STALE,
+        MAX_STALE >= N * CAMERA_FREQ,
         
         # Camera frequency is positive
         CAMERA_FREQ > 0,
         
         # NO_TTC is a large sentinel value
-        NO_TTC > TH_TTC_S * 1000,
+        NO_TTC > TH_TTC_S + 1
     ]
 
 
@@ -221,15 +230,26 @@ def buffer_constraints(vars_dict):
 # ============================================================================
 
 def detected(B_C):
-    """Z3 encoding of detected() predicate."""
-    count = Sum([If(c > TH_C, 1, 0) for c in B_C])
-    return count >= DETECTION_CONSENSUS * N
+    """
+    Z3 encoding of detected() predicate incorporating human reaction time.
+    A detection is valid if, within half a human reaction window's worth of frames,
+    enough frames show confidence > TH_C.
+    """
+    limit = min(N, RT_WINDOW_FRAMES)
+    count = Sum([If(B_C[i] > TH_C, 1, 0) for i in range(limit)])
+    return count >= RT_HALF_FRAMES
 
 
 def crossing(B_cross):
-    """Z3 encoding of crossing() predicate."""
-    count = Sum(B_cross)
-    return count >= CROSSING_CONSENSUS * N
+    """
+    Z3 encoding of crossing() predicate incorporating human reaction time.
+    A crossing is valid if, within half a human reaction window's worth of frames,
+    enough frames indicate crossing (B_cross == 1).
+    """
+    limit = min(N, RT_WINDOW_FRAMES)
+    count = Sum([B_cross[i] for i in range(limit)])
+    return count >= RT_HALF_FRAMES
+
 
 
 def valid_d(B_C, s_d):
@@ -243,30 +263,33 @@ def valid_c(B_cross, s_c):
 
 
 def s_distance(B_TTC):
-    """Check if distance is safe."""
-    k = int(S_DISTANCE_CONSENSUS * N)
-    count = Sum([If(B_TTC[i] >= TH_TTC_S, 1, 0) for i in range(k)])
+    """Symbolic safe distance check."""
+    k = ToInt(S_DISTANCE_CONSENSUS * N)
+    count_terms = [If(And(i < k, B_TTC[i] >= TH_TTC_S), 1, 0) for i in range(N)]
+    count = Sum(count_terms)
+
     return count >= MIN_VAL * k
 
 
 def s_r_distance(B_TTC):
     """Check if distance is safe-to-risky."""
-    k = int(SR_DISTANCE_CONSENSUS * N)
-    count = Sum([If(And(B_TTC[i] >= TH_TTC_R, B_TTC[i] < TH_TTC_S), 1, 0) for i in range(k)])
+    k = ToInt(SR_DISTANCE_CONSENSUS * N)
+    count = Sum([If(And(i < k, B_TTC[i] >= TH_TTC_R, B_TTC[i] < TH_TTC_S), 1, 0) for i in range(N)])
     return count >= MIN_VAL * k
 
 
 def r_c_distance(B_TTC):
     """Check if distance is risky-to-critical."""
-    k = int(RC_DISTANCE_CONSENSUS * N)
-    count = Sum([If(And(B_TTC[i] >= TH_TTC_C, B_TTC[i] < TH_TTC_R), 1, 0) for i in range(k)])
+    k = ToInt(SR_DISTANCE_CONSENSUS * N)
+    count = Sum([If(And(i < k, B_TTC[i] >= TH_TTC_C, B_TTC[i] < TH_TTC_R), 1, 0) for i in range(N)])
     return count >= MIN_VAL * k
 
 
 def c_distance(B_TTC):
-    """Check if distance is critical."""
-    limit = int(C_DISTANCE_CONSENSUS * N)
-    return And([B_TTC[i] < TH_TTC_C for i in range(limit)])
+    """Symbolically check if distance is critical."""
+    k = ToInt(SR_DISTANCE_CONSENSUS * N)
+    conditions = [Or(i >= k, B_TTC[i] < TH_TTC_C) for i in range(N)]
+    return And(conditions)
 
 
 def uncertain_distance(B_TTC):
