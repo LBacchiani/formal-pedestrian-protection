@@ -12,23 +12,26 @@ N = 10
 
 # Detection thresholds
 TH_C = 0.5  # Threshold for certain detection (confidence)
-TH_D_STALE = 500  # Threshold for detection stale data (ms)
-TH_C_STALE = 500  # Threshold for crossing stale data (ms)
+TH_D_STALE = 200  # Threshold for detection stale data (ms)
+TH_C_STALE = 200  # Threshold for crossing stale data (ms)
 
 # Time-to-collision thresholds (seconds)
 TH_TTC_S = 5.0  # Safe TTC threshold
 TH_TTC_R = 3.0  # Risky TTC threshold
 TH_TTC_C = 1.5  # Critical TTC threshold
+MIN_VAL = 0.8
 
 # Staleness upper bound
-MAX_STALE = 2000  # Maximum staleness (ms)
+MAX_STALE = 1000  # Maximum staleness (ms)
+MAX_UNCERTAIN = 2000  # Handover timeout (ms)
 
 DETECTION_CONSENSUS = CROSSING_CONSENSUS = 0.7
 S_DISTANCE_CONSENSUS = 0.8
 SR_DISTANCE_CONSENSUS = 0.6
 RC_DISTANCE_CONSENSUS = 0.4
 C_DISTANCE_CONSENSUS = 0.2
-
+NO_TTC = 10000000
+CAMERA_FREQ = 100  # Camera frequency (ms)
 
 
 # ============================================================================
@@ -75,7 +78,7 @@ class PedestrianProtectionAutomaton:
     - Detection confidence (B_C)
     - Time-to-collision (B_TTC)
     - Crossing status (B_cross)
-    - Staleness timers (s_d, s_c)
+    - Staleness timers (s_d, s_c, s_u)
     """
     
     def __init__(self):
@@ -91,6 +94,7 @@ class PedestrianProtectionAutomaton:
         # Staleness timers (ms)
         self.s_d = 0  # Detection staleness
         self.s_c = 0  # Crossing staleness
+        self.s_u = 0  # Uncertainty staleness
         
         # Last step call timestamp (seconds)
         self.last_step_call: Optional[float] = None
@@ -122,32 +126,40 @@ class PedestrianProtectionAutomaton:
         return self._crossing() or self.s_c < TH_C_STALE
     
     def _s_distance(self) -> bool:
-        """Check if distance is safe"""
+        """Check if distance is safe (Z3-matching implementation)"""
         if len(self.B_TTC) == 0:
             return True
-        count = sum(1 for ttc in self.B_TTC if ttc > TH_TTC_S)
-        return count >= S_DISTANCE_CONSENSUS * N
+        k = int(S_DISTANCE_CONSENSUS * N)
+        count = sum(1 for i in range(k) if self.B_TTC[i] >= TH_TTC_S)
+        return count >= MIN_VAL * k
     
     def _s_r_distance(self) -> bool:
-        """Check if distance is safe-to-risky"""
+        """Check if distance is safe-to-risky (Z3-matching implementation)"""
         if len(self.B_TTC) == 0:
             return False
-        count = sum(1 for ttc in self.B_TTC if TH_TTC_R <= ttc < TH_TTC_S)
-        return count >= SR_DISTANCE_CONSENSUS * N
+        k = int(SR_DISTANCE_CONSENSUS * N)
+        count = sum(1 for i in range(k) if TH_TTC_R <= self.B_TTC[i] < TH_TTC_S)
+        return count >= MIN_VAL * k
     
     def _r_c_distance(self) -> bool:
-        """Check if distance is risky-to-critical"""
+        """Check if distance is risky-to-critical (Z3-matching implementation)"""
         if len(self.B_TTC) == 0:
             return False
-        count = sum(1 for ttc in self.B_TTC if TH_TTC_C <= ttc < TH_TTC_R)
-        return count >= RC_DISTANCE_CONSENSUS * N
+        k = int(RC_DISTANCE_CONSENSUS * N)
+        count = sum(1 for i in range(k) if TH_TTC_C <= self.B_TTC[i] < TH_TTC_R)
+        return count >= MIN_VAL * k
     
     def _c_distance(self) -> bool:
-        """Check if distance is critical"""
+        """Check if distance is critical (Z3-matching implementation)"""
         if len(self.B_TTC) == 0:
             return False
-        count = sum(1 for ttc in self.B_TTC if ttc < TH_TTC_C)
-        return count >= C_DISTANCE_CONSENSUS * N
+        limit = int(C_DISTANCE_CONSENSUS * N)
+        return all(self.B_TTC[i] < TH_TTC_C for i in range(limit))
+    
+    def _uncertain_distance(self) -> bool:
+        """Check if distance classification is uncertain"""
+        return not (self._s_distance() or self._s_r_distance() or 
+                   self._r_c_distance() or self._c_distance())
     
     # ========================================================================
     # STATE TRANSITION LOGIC
@@ -161,15 +173,18 @@ class PedestrianProtectionAutomaton:
         """
         valid_d = self._valid_d()
         valid_c = self._valid_c()
+        det = self._detected()
+        cross = self._crossing()
         s_dist = self._s_distance()
         sr_dist = self._s_r_distance()
         rc_dist = self._r_c_distance()
         c_dist = self._c_distance()
+        unc_dist = self._uncertain_distance()
         
         # Transition logic based on current state
         if self.state == State.NORMAL:
             # e1: Stay in Normal
-            if not valid_d or s_dist:
+            if not valid_d or s_dist or unc_dist:
                 return State.NORMAL, Action.NONE
             # e2: To SafeWarning
             if valid_d and not valid_c and sr_dist:
@@ -188,11 +203,11 @@ class PedestrianProtectionAutomaton:
                 return State.EMERGENCY_BRAKING, Action.STOP
         
         elif self.state == State.SAFE_WARNING:
-            # e7: To Normal
-            if not valid_d or s_dist:
+            # e7: To Normal (including handover on uncertainty timeout)
+            if not valid_d or s_dist or self.s_u >= MAX_UNCERTAIN:
                 return State.NORMAL, Action.NONE
-            # e8: Stay in SafeWarning
-            if valid_d and not valid_c and sr_dist:
+            # e8: Stay in SafeWarning (including uncertain with timeout not reached)
+            if (valid_d and not valid_c and sr_dist) or (valid_d and unc_dist and self.s_u < MAX_UNCERTAIN):
                 return State.SAFE_WARNING, Action.NONE
             # e9: To Throttling
             if valid_d and ((not valid_c and rc_dist) or (valid_c and sr_dist)):
@@ -208,14 +223,14 @@ class PedestrianProtectionAutomaton:
                 return State.EMERGENCY_BRAKING, Action.STOP
         
         elif self.state == State.THROTTLING:
-            # e13: To Normal
-            if not valid_d or s_dist:
+            # e13: To Normal (including handover on uncertainty timeout)
+            if not valid_d or s_dist or self.s_u >= MAX_UNCERTAIN:
                 return State.NORMAL, Action.STOP_THROTTLING
             # e14: To SafeWarning
             if valid_d and not valid_c and sr_dist:
                 return State.SAFE_WARNING, Action.STOP_THROTTLING
-            # e15: Stay in Throttling
-            if valid_d and ((not valid_c and rc_dist) or (valid_c and sr_dist)):
+            # e15: Stay in Throttling (including uncertain with timeout not reached)
+            if valid_d and ((not valid_c and rc_dist) or (valid_c and sr_dist) or (unc_dist and self.s_u < MAX_UNCERTAIN)):
                 return State.THROTTLING, Action.NONE
             # e16: To CriticalSlowdown
             if valid_d and not valid_c and c_dist:
@@ -228,8 +243,8 @@ class PedestrianProtectionAutomaton:
                 return State.EMERGENCY_BRAKING, Action.STOP
         
         elif self.state == State.CRITICAL_SLOWDOWN:
-            # e19: To Normal
-            if not valid_d or s_dist:
+            # e19: To Normal (including handover on uncertainty timeout)
+            if not valid_d or s_dist or self.s_u >= MAX_UNCERTAIN:
                 return State.NORMAL, Action.STOP_BRAKING
             # e20: To SafeWarning
             if valid_d and not valid_c and sr_dist:
@@ -237,8 +252,8 @@ class PedestrianProtectionAutomaton:
             # e21: To Throttling
             if (not valid_c and rc_dist) or (valid_c and sr_dist):
                 return State.THROTTLING, Action.BRAKE_TO_THROTTLE
-            # e22: Stay in CriticalSlowdown
-            if valid_d and not valid_c and c_dist:
+            # e22: Stay in CriticalSlowdown (including uncertain with timeout not reached)
+            if (valid_d and not valid_c and c_dist) or (valid_d and unc_dist and self.s_u < MAX_UNCERTAIN):
                 return State.CRITICAL_SLOWDOWN, Action.NONE
             # e23: To SoftBraking
             if valid_d and valid_c and rc_dist:
@@ -248,14 +263,14 @@ class PedestrianProtectionAutomaton:
                 return State.EMERGENCY_BRAKING, Action.STOP
         
         elif self.state == State.SOFT_BRAKING:
-            # e25: To Normal
-            if not valid_d or s_dist:
+            # e25: To Normal (including handover on uncertainty timeout)
+            if not valid_d or not valid_c or s_dist or self.s_u >= MAX_UNCERTAIN:
                 return State.NORMAL, Action.STOP_BRAKING
             # e26: To SafeWarning
-            if valid_d and not valid_c and sr_dist:
+            if valid_d and valid_c and sr_dist:
                 return State.SAFE_WARNING, Action.STOP_BRAKING
-            # e27: Stay in SoftBraking
-            if valid_d and valid_c and rc_dist:
+            # e27: Stay in SoftBraking (including uncertain with timeout not reached)
+            if (valid_d and valid_c and rc_dist) or (valid_c and valid_d and unc_dist and self.s_u < MAX_UNCERTAIN):
                 return State.SOFT_BRAKING, Action.NONE
             # e28: To EmergencyBraking
             if valid_d and valid_c and c_dist:
@@ -263,15 +278,19 @@ class PedestrianProtectionAutomaton:
         
         elif self.state == State.EMERGENCY_BRAKING:
             # e29: To Normal
-            if not valid_d or not valid_c or s_dist:
+            if not det or not cross:
                 return State.NORMAL, Action.NONE
+            # e30: Stay in EmergencyBraking
+            if cross:
+                return State.EMERGENCY_BRAKING, Action.NONE
         
         # No transition available - this should not happen with proper invariants
         raise NoTransitionAvailableError(
             f"No valid transition available from state {self.state.value}. "
             f"State invariants may be violated. "
-            f"valid_d={valid_d}, valid_c={valid_c}, "
-            f"s_dist={s_dist}, sr_dist={sr_dist}, rc_dist={rc_dist}, c_dist={c_dist}"
+            f"valid_d={valid_d}, valid_c={valid_c}, det={det}, cross={cross}, "
+            f"s_dist={s_dist}, sr_dist={sr_dist}, rc_dist={rc_dist}, c_dist={c_dist}, "
+            f"unc_dist={unc_dist}, s_u={self.s_u}"
         )
     
     # ========================================================================
@@ -338,6 +357,15 @@ class PedestrianProtectionAutomaton:
         else:
             self.s_c = min(self.s_c + dt_ms, MAX_STALE)
         
+        # Update uncertainty staleness
+        # s_u resets to 0 when detection is fresh (s_d < MAX_STALE)
+        if self.s_d < MAX_STALE:
+            self.s_u = 0
+        elif self._uncertain_distance():
+            self.s_u = self.s_u + dt_ms
+        else:
+            self.s_u = 0
+        
         # Check for state transitions
         new_state, action = self._check_transitions()
         
@@ -362,12 +390,20 @@ class PedestrianProtectionAutomaton:
             },
             'staleness': {
                 's_d': self.s_d,
-                's_c': self.s_c
+                's_c': self.s_c,
+                's_u': self.s_u
             },
             'validity': {
                 'valid_d': self._valid_d(),
                 'valid_c': self._valid_c(),
                 'detected': self._detected(),
                 'crossing': self._crossing()
+            },
+            'distance': {
+                's_distance': self._s_distance(),
+                'sr_distance': self._s_r_distance(),
+                'rc_distance': self._r_c_distance(),
+                'c_distance': self._c_distance(),
+                'uncertain': self._uncertain_distance()
             }
         }
