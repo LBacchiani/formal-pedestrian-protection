@@ -552,7 +552,7 @@ def process_image():
             yaw_deg = abs(math.degrees(yaw))
             threshold = max_yaw_allowed(distance)
 
-            crossing = yaw_deg <= threshold
+            crossing = 1 if yaw_deg <= threshold else 0
 
             time_to_collision = distance / vehicle_speed_mps if vehicle_speed_mps > 0 else float('inf')
             detected_pedestrians.append(
@@ -577,12 +577,12 @@ def process_image():
         payload = {
             "timestamp": now,
             "vehicle_speed": vehicle_speed_mps,
-            "yolo_conf": float(conf) if conf else None,
+            "yolo_conf": float(conf) if conf else 0.0,
             "camera_distance": closest_ped.distance if closest_ped else None,
             "camera_yaw_deg": math.degrees(yaw) if yaw is not None else None,
             "camera_pitch_deg": math.degrees(pitch) if pitch is not None else None,
-            "camera_ttc": ttc_camera if conf else None,
-            "crossing": crossing if conf else None
+            "camera_ttc": ttc_camera if conf else 10000,
+            "crossing": crossing if conf else 0
         }
 
         # ---- invio asincrono SEMPRE ----
