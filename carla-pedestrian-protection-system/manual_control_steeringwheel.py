@@ -304,7 +304,7 @@ class DualControl(object):
         self._joystick.init()
 
         # Set the steering wheel name you are using that matches the name in the wheel_config.ini
-        steering_wheel_name = 'G29 Racing Wheel'
+        steering_wheel_name = 'VirtualWheel'
 
         self._parser = ConfigParser()
         self._parser.read('wheel_config.ini')
@@ -327,51 +327,79 @@ class DualControl(object):
     def parse_events(self, world, clock):
         if isinstance(self._control, carla.VehicleControl):
             current_lights = self._lights
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return True
+
+            # --- Gestione pulsanti joystick ---
             elif event.type == pygame.JOYBUTTONDOWN:
-                # CROSS -> Respawn
-                if event.button == self._respawn_idx:
+                # X -> Toggle Reverse gear (solo se il veicolo è quasi fermo)
+                if event.button == 0:
+                    velocity = world.player.get_velocity()
+                    speed = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
+                    if speed < 0.5:  # circa fermo
+                        if self._control.gear >= 0:
+                            self._control.gear = -1
+                            self._control.reverse = True
+                            world.hud.notification("Reverse gear engaged")
+                        else:
+                            self._control.gear = 1
+                            self._control.reverse = False
+                            world.hud.notification("Drive gear engaged")
+                    else:
+                        world.hud.notification("⚠️ Can't switch gear while moving", seconds=2.0)
+
+                # CROSS (configurato) -> Respawn
+                elif event.button == self._respawn_idx:
                     world.restart()
+
                 # SQUARE -> Toggle HUD
                 elif event.button == self._hud_idx:
                     world.hud.toggle_info()
+
                 # CIRCLE -> Toggle camera position
                 elif event.button == self._camera_idx:
                     world.camera_manager.toggle_camera()
+
                 # TRIANGLE -> Toggle Weather
                 elif event.button == self._weathers_idx:
                     world.next_weather()
-                # RIGHT PADDLE -> Switch gears (reverse/forward)
+
+                # RIGHT PADDLE / ALT -> Switch gears (fallback)
                 elif event.button == self._reverse_idx:
                     self._control.gear = 1 if self._control.reverse else -1
+
                 # L2 -> switch lights modes
                 elif event.button == self._lights_idx:
-                    # closed -> position -> low beam -> fog
                     if not self._lights & carla.VehicleLightState.Position:
                         world.hud.notification("Position lights")
                         current_lights |= carla.VehicleLightState.Position
-                    else:
+                    elif not self._lights & carla.VehicleLightState.LowBeam:
                         world.hud.notification("Low beam lights")
                         current_lights |= carla.VehicleLightState.LowBeam
-                    if self._lights & carla.VehicleLightState.LowBeam:
+                    elif not self._lights & carla.VehicleLightState.Fog:
                         world.hud.notification("Fog lights")
                         current_lights |= carla.VehicleLightState.Fog
-                    if self._lights & carla.VehicleLightState.Fog:
+                    else:
                         world.hud.notification("Lights off")
-                        current_lights ^= carla.VehicleLightState.Position
-                        current_lights ^= carla.VehicleLightState.LowBeam
-                        current_lights ^= carla.VehicleLightState.Fog
+                        current_lights &= ~(carla.VehicleLightState.Position |
+                                            carla.VehicleLightState.LowBeam |
+                                            carla.VehicleLightState.Fog)
+
                 # L3 -> Toggle left blinker
                 elif event.button == self._left_blinker_idx:
                     current_lights ^= carla.VehicleLightState.LeftBlinker
+
                 # R3 -> Toggle right blinker
                 elif event.button == self._right_blinker_idx:
                     current_lights ^= carla.VehicleLightState.RightBlinker
+
+                # Cambia sensore camera (eventuale)
                 elif event.button == 23:
                     world.camera_manager.next_sensor()
 
+            # --- Gestione tasti tastiera ---
             elif event.type == pygame.KEYUP:
                 if self._is_quit_shortcut(event.key):
                     return True
@@ -393,6 +421,7 @@ class DualControl(object):
                     world.camera_manager.set_sensor(event.key - 1 - K_0)
                 elif event.key == K_r:
                     world.camera_manager.toggle_recording()
+
                 if isinstance(self._control, carla.VehicleControl):
                     if event.key == K_q:
                         self._control.gear = 1 if self._control.reverse else -1
@@ -400,32 +429,34 @@ class DualControl(object):
                         self._control.manual_gear_shift = not self._control.manual_gear_shift
                         self._control.gear = world.player.get_control().gear
                         world.hud.notification('%s Transmission' %
-                                               ('Manual' if self._control.manual_gear_shift else 'Automatic'))
+                                            ('Manual' if self._control.manual_gear_shift else 'Automatic'))
                     elif self._control.manual_gear_shift and event.key == K_COMMA:
                         self._control.gear = max(-1, self._control.gear - 1)
                     elif self._control.manual_gear_shift and event.key == K_PERIOD:
-                        self._control.gear = self._control.gear + 1
+                        self._control.gear += 1
                     elif event.key == K_p:
                         self._autopilot_enabled = not self._autopilot_enabled
                         world.player.set_autopilot(self._autopilot_enabled)
-                        world.hud.notification('Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
+                        world.hud.notification('Autopilot %s' %
+                                            ('On' if self._autopilot_enabled else 'Off'))
 
+        # --- Luci automatiche ---
         self._control.reverse = self._control.gear < 0
-        # Set automatic control-related vehicle lights
         if self._control.brake:
             current_lights |= carla.VehicleLightState.Brake
-        else: # Remove the Brake flag
+        else:
             current_lights &= ~carla.VehicleLightState.Brake
+
         if self._control.reverse:
             current_lights |= carla.VehicleLightState.Reverse
-        else: # Remove the Reverse flag
+        else:
             current_lights &= ~carla.VehicleLightState.Reverse
 
-        # Change the light state only if necessary
         if current_lights != self._lights:
             self._lights = current_lights
             world.player.set_light_state(carla.VehicleLightState(self._lights))
 
+        # --- Applicazione controlli ---
         if not self._autopilot_enabled:
             if isinstance(self._control, carla.VehicleControl):
                 self._parse_vehicle_keys(pygame.key.get_pressed(), clock.get_time())
@@ -434,6 +465,7 @@ class DualControl(object):
             elif isinstance(self._control, carla.WalkerControl):
                 self._parse_walker_keys(pygame.key.get_pressed(), clock.get_time())
             world.player.apply_control(self._control)
+
 
     def _parse_vehicle_keys(self, keys, milliseconds):
         self._control.throttle = 1.0 if keys[K_UP] or keys[K_w] else 0.0
