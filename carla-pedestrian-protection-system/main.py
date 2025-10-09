@@ -681,45 +681,86 @@ class GameLoop(object):
                     self.sim_world.tick()
                 clock.tick_busy_loop(self.fps)
 
-                try:
-                    # ---- Recupero output immagini e detections ----
-                    with processed_output_lock:
-                        output_rgb_image = processed_output["rgb_image"]
-                        output_depth_image = processed_output["depth_image"]
-                        output_detections = processed_output["detections"]
+                # === Visualizzazione OpenCV ===
+                if CAMERA_DEBUG:
+                    try:
+                        ready = False
+                        with processed_output_lock:
+                            if processed_output is not None \
+                            and "rgb_image" in processed_output \
+                            and "depth_image" in processed_output \
+                            and "detections" in processed_output:
+                                rgb_arr = processed_output["rgb_image"]
+                                depth_arr = processed_output["depth_image"]
+                                dets = processed_output["detections"]
+                                ready = True
 
-                    bgr_for_display = cv2.cvtColor(output_rgb_image, cv2.COLOR_RGB2BGR)
-                    depth_for_display = cv2.cvtColor(output_depth_image, cv2.COLOR_RGB2BGR)
+                        if ready:
+                            # ---- RGB: da RGB (CARLA) a BGR (OpenCV)
+                            if rgb_arr is not None and rgb_arr.ndim == 3 and rgb_arr.shape[2] >= 3:
+                                bgr_for_display = cv2.cvtColor(rgb_arr[:, :, :3], cv2.COLOR_RGB2BGR)
+                            else:
+                                bgr_for_display = None
 
-                    # ---- Disegno pedoni YOLO ----
-                    for _, bbox, _ in output_detections:
-                        cv2.rectangle(
-                            bgr_for_display, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2
-                        )
+                            # ---- DEPTH: converti da codifica CARLA a visuale colorata
+                            if depth_arr is not None and depth_arr.ndim == 3 and depth_arr.shape[2] >= 4:
+                                rgb = depth_arr[:, :, :3].astype(np.uint32)
+                                r = rgb[:, :, 2]
+                                g = rgb[:, :, 1]
+                                b = rgb[:, :, 0]
+                                norm = (r + g * 256 + b * 256**2) / (256**3 - 1)
+                                depth_m = np.clip(norm * 1000.0, 0, 50)
+                                depth_vis = (255 * (1.0 - depth_m / 50.0)).astype(np.uint8)
+                                depth_for_display = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
 
-                    # ---- Mostra finestre debug ----
-                    if CAMERA_DEBUG:
-                        if bgr_for_display is not None:
-                            cv2.imshow('RGB image', bgr_for_display)
-                        if depth_for_display is not None:
-                            cv2.imshow('Depth image', depth_for_display)
+                                # === Aggiungi legenda laterale (color bar) ===
+                                h, w, _ = depth_for_display.shape
+                                legend_h = h
+                                legend_w = 40
+                                legend = np.linspace(255, 0, legend_h).astype(np.uint8)
+                                legend = cv2.applyColorMap(legend.reshape(-1, 1), cv2.COLORMAP_JET)
+                                legend = cv2.resize(legend, (legend_w, legend_h))
 
-                except Exception as e:
-                    # In caso di errore (frame mancante o simile)
-                    pass
+                                # Testo scala metri
+                                step = legend_h // 5
+                                for i, dist in enumerate([0, 10, 20, 30, 40, 50]):
+                                    y = int(legend_h - (dist / 50.0) * legend_h)
+                                    cv2.putText(legend, f"{dist}m", (2, max(12, y - 2)),
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+
+                                # Affianca la legenda al frame depth
+                                depth_for_display = np.hstack((depth_for_display, legend))
+                            else:
+                                depth_for_display = None
+
+                            # ---- Disegna bounding boxes YOLO ----
+                            if bgr_for_display is not None and dets:
+                                for _, bbox, _ in dets:
+                                    cv2.rectangle(
+                                        bgr_for_display, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2
+                                    )
+
+                            # ---- Mostra finestre ----
+                            if bgr_for_display is not None:
+                                cv2.imshow('RGB image', bgr_for_display)
+                            if depth_for_display is not None:
+                                cv2.imshow('Depth image', depth_for_display)
+
+                            # FONDAMENTALE per aggiornare le finestre OpenCV
+                            cv2.waitKey(1)
+
+                    except Exception as e:
+                        print(f"[DISPLAY] Error updating OpenCV windows: {e}")
 
                 # === Timeout per resettare stato ===
                 if time.time() - mqtt_last_update > 0.7 and current_action != "normal":
                     current_action = "normal"
 
-                
-                
-                # === Eventi utente (solo se in stato "normal") ===
+                # === Eventi utente (solo se in stato 'normal') ===
                 if current_action == "normal":
                     if self.controller.parse_events(self.world, clock):
                         pass
                 else:
-                    # Ignora comandi utente
                     pygame.event.pump()
 
                 # === Applica comportamento in base allo stato MQTT ===
@@ -730,7 +771,7 @@ class GameLoop(object):
                     control.brake = 1.0
                     self.world.player.apply_control(control)
                     print("[MQTT] Frenata di emergenza attiva")
-                    continue  # ignora controllo manuale
+                    continue
 
                 elif current_action == "mild_brake":
                     control.throttle = 0.0
@@ -742,6 +783,7 @@ class GameLoop(object):
                 elif current_action == "warning":
                     print("[MQTT] Avviso al conducente: pedone vicino")
 
+                # === Render HUD e mondo ===
                 self.render(clock)
 
         finally:
@@ -751,6 +793,7 @@ class GameLoop(object):
             if self.world is not None:
                 self.world.destroy()
             pygame.quit()
+
 
 
 
