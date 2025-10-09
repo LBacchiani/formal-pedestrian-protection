@@ -25,10 +25,11 @@ import json
 class Pedestrian:
     x: int
     y: int
-    distance: float # maybe int with fixed precision is enough
+    distance: float
     time_to_collision: float
     yaw: float = 0.0
     pitch: float = 0.0
+    confidence: float = 0.0
 
 class Mode(Enum):
     KEYBOARD = 1
@@ -38,7 +39,7 @@ class Mode(Enum):
 ################# Config #################
 ##########################################
 
-MODE = Mode.STEERING_WHEEL
+MODE = Mode.KEYBOARD
 CAMERA_DEBUG = True
 NUM_WALKERS = 75
 
@@ -76,7 +77,7 @@ def on_mqtt_message(client, userdata, msg):
         if lvl is not None:
             try:
                 level_brk = float(lvl)
-                level_brk = max(0.0, min(level_brk, 1.0))  # clamp 0–1
+                level_brk = max(0.0, min(level_brk, 1.0)) 
             except ValueError:
                 level_brk = 0.0
         else:
@@ -214,7 +215,6 @@ def world_to_pixel(
     camera: carla.Sensor,
     K: np.ndarray
 ) -> Optional[Tuple[int, int]]:
-    # world -> camera
     M_cam = carla_transform_to_matrix(camera.get_transform())
     world2cam = np.linalg.inv(M_cam)
 
@@ -269,14 +269,12 @@ def setup_camera(car: carla.Vehicle):
 def spawn_walker(world: carla.World):
     blueprint_library = world.get_blueprint_library()
 
-    # scegli solo i blueprint che ti interessano
     allowed_ids = ["walker.pedestrian.0042", "walker.pedestrian.0039", "walker.pedestrian.0037"]
     walker_blueprints = [bp for bp in blueprint_library.filter('walker.pedestrian.*') if bp.id in allowed_ids]
 
     if not walker_blueprints:
         return None, None
 
-    # scegli uno dei blueprint "grossi"
     walker_bp = random.choice(walker_blueprints)
 
     # assegna velocità
@@ -315,10 +313,6 @@ def spawn_walker(world: carla.World):
     return walker, controller
 
 def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist=8.0):
-    """
-    Spawna un pedone in un punto casuale, trova il punto più lontano,
-    ma evita di spawnare o dirigersi troppo vicino ad altri pedoni.
-    """
     if existing_positions is None:
         existing_positions = []
 
@@ -341,7 +335,7 @@ def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist
     if not spawn_points:
         return None, None, existing_positions
 
-    # --- Scegli punto di partenza non troppo vicino ad altri ---
+
     random.shuffle(spawn_points)
     start_point = None
     for sp in spawn_points:
@@ -351,10 +345,9 @@ def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist
             break
 
     if start_point is None:
-        # print("[WALKER] Nessun punto di spawn valido trovato (troppo affollato).")
         return None, None, existing_positions
 
-    # --- Trova il punto più lontano tra quelli non troppo vicini ---
+    # Trova il punto più lontano tra quelli non troppo vicini
     def distance(a, b):
         return a.location.distance(b.location)
 
@@ -366,7 +359,7 @@ def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist
             break
 
     if farthest_point is None:
-        farthest_point = far_points[0]  # fallback
+        farthest_point = far_points[0]
 
     walker = world.try_spawn_actor(walker_bp, start_point)
     if walker is None:
@@ -404,10 +397,6 @@ def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist
 
     return walker, controller, existing_positions
 
-
-
-
-
 ##########################################
 ############ Image Processing ############
 ##########################################
@@ -418,8 +407,6 @@ def detect_pedestrians(image):
     - Usa automaticamente GPU se disponibile
     - Se è su CPU, riduce la risoluzione (imgsz=480)
     """
-
-    # Scegli il dispositivo automaticamente
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     imgsz = 640 if device == 'cuda' else 480
     results = model.predict(image, device=device, imgsz=imgsz, verbose=False)[0]
@@ -493,15 +480,15 @@ def max_yaw_allowed(distance):
     """
     Restituisce l'angolo massimo (in gradi) che consideriamo crossing.
     - 0 m  → ±35°
-    - 34 m → ±0° (oltre nessun crossing)
+    - 25 m → ±0° (oltre nessun crossing)
     """
     if distance <= 0:
         return 35.0
-    elif distance >= 34:
+    elif distance >= 25.0:
         return 0.0
     else:
-        # interpolazione lineare da 35° (0m) → 0° (34m)
-        return 35.0 * (1 - distance / 34.0)
+        # Interpolazione lineare da 35° (0 m) → 0° (25 m)
+        return 35.0 * (1 - distance / 25.0)
 
 
 def process_image():
@@ -515,7 +502,7 @@ def process_image():
     global input_rgb_image, input_depth_image, processed_output
 
     last_inference_time = 0.0
-    target_dt = 0.08  # 10Hz
+    target_dt = 0.10  # 10Hz
     crossing = 0
 
     print("[PROCESS] Avviato thread di elaborazione immagini...")
@@ -560,28 +547,46 @@ def process_image():
             distance = get_distance_to_pedestrian_centroid(centroid, depth_array)
             yaw, pitch = pixel_to_angle(centroid[0], centroid[1], rgb_camera.calibration)
 
-            yaw_deg = abs(math.degrees(yaw))
+            # ---- ottieni angolo di sterzo del veicolo ----
+            steer_norm = vehicle.get_control().steer  # range [-1, +1]
+            steer_angle_deg = steer_norm * 35.0       # ±35° sterzo max
+
+            # ---- calcola deviazione yaw rispetto alla direzione del volante ----
+            yaw_deg = math.degrees(yaw)
+            relative_yaw = yaw_deg - steer_angle_deg  # ruota il cono nella direzione di sterzo
+
             threshold = max_yaw_allowed(distance)
-            crossing = 1 if yaw_deg <= threshold else 0
+            crossing = 1 if abs(relative_yaw) <= threshold else 0
 
             time_to_collision = distance / vehicle_speed_mps if vehicle_speed_mps > 0.01 else float('inf')
+
             detected_pedestrians.append(Pedestrian(
                 x=centroid[0],
                 y=centroid[1],
                 distance=distance,
                 time_to_collision=time_to_collision,
                 yaw=yaw,
-                pitch=pitch
+                pitch=pitch,
+                confidence=float(conf)
             ))
 
-        # ---- trova pedone più vicino ----
+        # trova pedone più vicino
         closest_ped = min(detected_pedestrians, key=lambda p: p.distance) if detected_pedestrians else None
-        conf = max([c for c, _, _ in detections]) if detections else 0.0
-        yaw, pitch = (pixel_to_angle(closest_ped.x, closest_ped.y, rgb_camera.calibration)
-                      if closest_ped else (None, None))
-        ttc_camera = closest_ped.time_to_collision if closest_ped else None
 
-        # ---- prepara payload ----
+        # confidenza del pedone più vicino
+        conf = closest_ped.confidence if closest_ped else 0.0
+
+        # angoli e TTC del più vicino
+        if closest_ped:
+            yaw, pitch = closest_ped.yaw, closest_ped.pitch
+            ttc_camera = closest_ped.time_to_collision
+            # crossing coerente col più vicino
+            yaw_deg_closest = abs(math.degrees(yaw))
+            crossing = 1 if yaw_deg_closest <= max_yaw_allowed(closest_ped.distance) else 0
+        else:
+            yaw, pitch, ttc_camera, crossing = None, None, None, 0
+            
+        # prepara payload
         payload = {
             "timestamp": now,
             "vehicle_speed": vehicle_speed_mps,
@@ -593,7 +598,7 @@ def process_image():
             "crossing": crossing if conf else 0
         }
 
-        # ---- stampa di debug ----
+        # stampa di debug
         print("[SUMMARY]",
               f"speed={vehicle_speed_mps:.2f} m/s",
               f"conf={payload['yolo_conf']:.2f}",
@@ -603,7 +608,7 @@ def process_image():
               f"cross={payload['crossing']}"
         )
 
-        # ---- salva per rendering ----
+        # salva per rendering
         with processed_output_lock:
             processed_output = {
                 "rgb_image": rgb_array,
@@ -676,12 +681,12 @@ class GameLoop(object):
             global current_action, mqtt_last_update
 
             while True:
-                # === Sync tick ===
+                # Sync tick 
                 if self.args.sync:
                     self.sim_world.tick()
                 clock.tick_busy_loop(self.fps)
 
-                # === Visualizzazione OpenCV ===
+                # Visualizzazione OpenCV
                 if CAMERA_DEBUG:
                     try:
                         ready = False
@@ -696,13 +701,13 @@ class GameLoop(object):
                                 ready = True
 
                         if ready:
-                            # ---- RGB: da RGB (CARLA) a BGR (OpenCV)
+                            # RGB: da RGB (CARLA) a BGR (OpenCV)
                             if rgb_arr is not None and rgb_arr.ndim == 3 and rgb_arr.shape[2] >= 3:
                                 bgr_for_display = cv2.cvtColor(rgb_arr[:, :, :3], cv2.COLOR_RGB2BGR)
                             else:
                                 bgr_for_display = None
 
-                            # ---- DEPTH: converti da codifica CARLA a visuale colorata
+                            # DEPTH: converti da codifica CARLA a visuale colorata
                             if depth_arr is not None and depth_arr.ndim == 3 and depth_arr.shape[2] >= 4:
                                 rgb = depth_arr[:, :, :3].astype(np.uint32)
                                 r = rgb[:, :, 2]
@@ -713,7 +718,7 @@ class GameLoop(object):
                                 depth_vis = (255 * (1.0 - depth_m / 50.0)).astype(np.uint8)
                                 depth_for_display = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
 
-                                # === Aggiungi legenda laterale (color bar) ===
+                                # Aggiungi legenda laterale (color bar) 
                                 h, w, _ = depth_for_display.shape
                                 legend_h = h
                                 legend_w = 40
@@ -733,38 +738,45 @@ class GameLoop(object):
                             else:
                                 depth_for_display = None
 
-                            # ---- Disegna bounding boxes YOLO ----
+                            # Disegna bounding boxes YOLO
                             if bgr_for_display is not None and dets:
                                 for _, bbox, _ in dets:
                                     cv2.rectangle(
                                         bgr_for_display, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2
                                     )
 
-                            # ---- Mostra finestre ----
+                            # Mostra finestre
                             if bgr_for_display is not None:
                                 cv2.imshow('RGB image', bgr_for_display)
                             if depth_for_display is not None:
                                 cv2.imshow('Depth image', depth_for_display)
 
-                            # FONDAMENTALE per aggiornare le finestre OpenCV
                             cv2.waitKey(1)
 
                     except Exception as e:
                         print(f"[DISPLAY] Error updating OpenCV windows: {e}")
 
-                # === Timeout per resettare stato ===
+                # Timeout per resettare stato
                 if time.time() - mqtt_last_update > 0.7 and current_action != "normal":
                     current_action = "normal"
 
-                # === Eventi utente (solo se in stato 'normal') ===
+                vel = self.world.player.get_velocity()
+                speed_mps = math.sqrt(vel.x**2 + vel.y**2 + vel.z**2)
+                speed_kmh = speed_mps * 3.6
+                
+                if speed_kmh < 8 and current_action != "emergency_brake":
+                    current_action="normal"
+
+                # Eventi utente (solo se in stato 'normal') 
                 if current_action == "normal":
                     if self.controller.parse_events(self.world, clock):
                         pass
                 else:
                     pygame.event.pump()
 
-                # === Applica comportamento in base allo stato MQTT ===
                 control = carla.VehicleControl()
+
+                # Applica comportamento in base allo stato MQTT
 
                 if current_action == "emergency_brake":
                     control.throttle = 0.0
@@ -783,11 +795,11 @@ class GameLoop(object):
                 elif current_action == "warning":
                     print("[MQTT] Avviso al conducente: pedone vicino")
 
-                # === Render HUD e mondo ===
+                # Render HUD e mondo 
                 self.render(clock)
 
         finally:
-            # === Cleanup finale ===
+            # Cleanup finale
             if self.original_settings:
                 self.sim_world.apply_settings(self.original_settings)
             if self.world is not None:
@@ -891,7 +903,6 @@ def rgb_camera_callback(image):
         with input_rgb_image_lock:
             input_rgb_image = image
     except Exception as e:
-        # print(e.with_traceback())
         pass
 
 def depth_camera_callback(image):
@@ -900,7 +911,6 @@ def depth_camera_callback(image):
         with input_depth_image_lock:
             input_depth_image = image
     except Exception as e:
-        # print(e.with_traceback())
         pass
 
 rgb_camera.listen(lambda image: rgb_camera_callback(image))
@@ -911,7 +921,6 @@ threading.Thread(target=process_image, daemon=True).start()
 def cleanup():
     remove_all(world)
 
-# start the game loop
 try:
     game_loop.start()
 except KeyboardInterrupt:
