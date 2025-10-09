@@ -138,7 +138,7 @@ world = client.get_world()
 # world.set_weather(weather)
 
 if MODE == Mode.STEERING_WHEEL:
-    import manual_control_steeringwheel as mc
+    import manual_control_steeringwheel_ubuntu as mc
     from importlib import reload
     reload(mc)
 elif MODE == Mode.KEYBOARD:
