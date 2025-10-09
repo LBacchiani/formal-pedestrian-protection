@@ -1,6 +1,6 @@
 import json
 import paho.mqtt.client as mqtt
-from automaton_module import PedestrianProtectionAutomaton  # assuming your automaton is in this module
+from automaton import PedestrianProtectionAutomaton  # assuming your automaton is in this module
 
 # ============================================================================
 # MQTT CONFIGURATION

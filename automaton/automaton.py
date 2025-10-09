@@ -32,7 +32,8 @@ C_DISTANCE_CONSENSUS = 0.2
 NO_TTC = 10000000
 CAMERA_FREQ = 100  # Camera frequency (ms)
 RT_H_VAL = 700 # Reaction time (ms)
-RT_WINDOW_FRAMES = int(RT_H_VAL / CAMERA_FREQ_VAL)   
+RT_WINDOW_FRAMES = int(RT_H_VAL / CAMERA_FREQ) 
+RT_HALF_FRAMES = RT_WINDOW_FRAMES / 2
 
 
 # ============================================================================
@@ -51,15 +52,25 @@ class State(Enum):
 
 class Action(Enum):
     """Actions that can be emitted by the automaton"""
-    BRAKE = "brake"
-    STOP = "stop"
-    THROTTLE_ACCELERATION = "throttle_acceleration"
-    ALERTING_DRIVER = "alerting_driver"
-    REMOVE_ALERT = "remove_alert"
-    STOP_THROTTLING = "stop_throttling"
-    STOP_BRAKING = "stop_braking"
-    BRAKE_TO_THROTTLE = "brake_to_throttle"
-    NONE = "_"  # No action
+    # BRAKE = "brake"
+    # STOP = "stop"
+    # THROTTLE_ACCELERATION = "throttle_acceleration"
+    # ALERTING_DRIVER = "alerting_driver"
+    # REMOVE_ALERT = "remove_alert"
+    # STOP_THROTTLING = "stop_throttling"
+    # STOP_BRAKING = "stop_braking"
+    # BRAKE_TO_THROTTLE = "brake_to_throttle"
+    # NONE = "_"  # No action
+
+    BRAKE = "mild_brake"
+    STOP = "emergency_brake"
+    THROTTLE_ACCELERATION = "mild_brake" #mild brake con 0 di frenata e 0 di gas 
+    ALERTING_DRIVER = "warning"
+    REMOVE_ALERT = "normal"
+    STOP_THROTTLING = "normal" #  
+    STOP_BRAKING = "normal"
+    BRAKE_TO_THROTTLE = "mild_brake" #mild brake con 0 di frenata e 0 di gas
+    NONE = "_"  # No action continui a fare l'azione che stavi facendo 
 
 
 class NoTransitionAvailableError(Exception):

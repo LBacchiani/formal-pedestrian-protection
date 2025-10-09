@@ -45,7 +45,8 @@ NUM_WALKERS = 75
 
 BROKER = "localhost"
 PORT = 1883
-TOPIC = "pedestrian_monitoring"
+TOPIC_SEND = "vehicle"
+TOPIC_REC = "action"
 
 CAMERA_WIDTH = 1080
 CAMERA_HEIGHT = 720
@@ -83,17 +84,20 @@ def on_mqtt_message(client, userdata, msg):
         else:
             level_brk = 0.0
 
-        if action in ["emergency_brake", "warning", "mild_brake", "normal"]:
-            current_action = action
-            mqtt_last_update = time.time()
-            print(f"[MQTT] Action received: {action}")
+        print(str(payload))
+        print(str(action))
+        if action in ["emergency_brake", "warning", "mild_brake", "normal", "_"]:
+            if action != "_":
+                current_action = action
+                mqtt_last_update = time.time()
+                print(f"[MQTT] Action received: {action}")
         else:
             print(f"[MQTT] Unknown action: {action}")
     except Exception as e:
         print("[MQTT] Error parsing message:", e)
 
 mqtt_client.on_message = on_mqtt_message
-mqtt_client.subscribe(TOPIC)
+mqtt_client.subscribe(TOPIC_REC)
 
 
 model = YOLO("yolov8n.pt")
@@ -470,7 +474,7 @@ def pixel_to_angle(u: int, v: int, K: np.ndarray) -> Tuple[float, float]:
 def send_mqtt_async(payload: dict):
     def _send():
         try:
-            mqtt_client.publish(TOPIC, json.dumps(payload))
+            mqtt_client.publish(TOPIC_SEND, json.dumps(payload))
         except Exception as e:
             print("[MQTT] Publish failed:", e)
     threading.Thread(target=_send, daemon=True).start()
@@ -508,7 +512,7 @@ def process_image():
     print("[PROCESS] Avviato thread di elaborazione immagini...")
 
     while True:
-        # ---- acquisizione immagini ----
+        # acquisizione immagini
         with input_rgb_image_lock:
             rgb_image = input_rgb_image
         with input_depth_image_lock:
@@ -524,7 +528,7 @@ def process_image():
             continue
         last_inference_time = now
 
-        # ---- conversione zero-copy ----
+        # conversione zero-copy
         rgb_array = np.frombuffer(rgb_image.raw_data, dtype=np.uint8)
         rgb_array = rgb_array.reshape((rgb_image.height, rgb_image.width, 4))[:, :, :3]
 
@@ -532,26 +536,26 @@ def process_image():
         depth_array = depth_array.reshape((depth_image.height, depth_image.width, 4))
 
 
-        # ---- velocità veicolo ----
+        # velocità veicolo
         vehicle_speed = vehicle.get_velocity()
         vehicle_speed_mps = math.sqrt(vehicle_speed.x**2 + vehicle_speed.y**2 + vehicle_speed.z**2)
 
-        # ---- detection pedoni (YOLO) ----
+        # detection pedoni (YOLO)
 
         detections = detect_pedestrians(rgb_array)
 
         detected_pedestrians: List[Pedestrian] = []
 
-        # ---- elaborazione pedoni ----
+        # elaborazione pedoni
         for conf, _, centroid in detections:
             distance = get_distance_to_pedestrian_centroid(centroid, depth_array)
             yaw, pitch = pixel_to_angle(centroid[0], centroid[1], rgb_camera.calibration)
 
-            # ---- ottieni angolo di sterzo del veicolo ----
+            # ottieni angolo di sterzo del veicolo
             steer_norm = vehicle.get_control().steer  # range [-1, +1]
             steer_angle_deg = steer_norm * 35.0       # ±35° sterzo max
 
-            # ---- calcola deviazione yaw rispetto alla direzione del volante ----
+            # calcola deviazione yaw rispetto alla direzione del volante
             yaw_deg = math.degrees(yaw)
             relative_yaw = yaw_deg - steer_angle_deg  # ruota il cono nella direzione di sterzo
 
@@ -590,23 +594,25 @@ def process_image():
         payload = {
             "timestamp": now,
             "vehicle_speed": vehicle_speed_mps,
-            "yolo_conf": float(conf),
+            "confidence": float(conf),
             "camera_distance": closest_ped.distance if closest_ped else None,
             "camera_yaw_deg": math.degrees(yaw) if yaw is not None else None,
             "camera_pitch_deg": math.degrees(pitch) if pitch is not None else None,
-            "camera_ttc": ttc_camera if conf else 10000,
-            "crossing": crossing if conf else 0
+            "ttc": ttc_camera if conf else 10000,
+            "is_crossing": crossing if conf else 0
         }
 
-        # stampa di debug
-        print("[SUMMARY]",
-              f"speed={vehicle_speed_mps:.2f} m/s",
-              f"conf={payload['yolo_conf']:.2f}",
-              f"dist={payload['camera_distance']:.1f}m" if payload['camera_distance'] else "dist=None",
-              f"yaw={payload['camera_yaw_deg']:.1f}°" if payload['camera_yaw_deg'] else "yaw=None",
-              f"ttc={payload['camera_ttc']:.2f}" if payload['camera_ttc'] else "ttc=None",
-              f"cross={payload['crossing']}"
-        )
+        send_mqtt_async(payload)
+
+        # # stampa di debug
+        # print("[SUMMARY]",
+        #       f"speed={vehicle_speed_mps:.2f} m/s",
+        #       f"confidence={payload['confidence']:.2f}",
+        #       f"dist={payload['camera_distance']:.1f}m" if payload['camera_distance'] else "dist=None",
+        #       f"yaw={payload['camera_yaw_deg']:.1f}°" if payload['camera_yaw_deg'] else "yaw=None",
+        #       f"ttc={payload['ttc']:.2f}" if payload['ttc'] else "ttc=None",
+        #       f"is_crossing={payload['is_crossing']}"
+        # )
 
         # salva per rendering
         with processed_output_lock:
@@ -615,9 +621,6 @@ def process_image():
                 "depth_image": depth_array,
                 "detections": detections
             }
-
-
-
 
 ##########################################
 ########### Gameloop and Setup ###########
