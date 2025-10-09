@@ -143,7 +143,7 @@ class PedestrianProtectionAutomaton:
         return count >= MIN_VAL * k
     
     def _r_c_distance(self) -> bool:
-        """Check if distance is risky-to-critical (Z3-matching implementation)"""
+        """Check if distance is risky-to-critical"""
         if len(self.B_TTC) == 0:
             return False
         k = int(RC_DISTANCE_CONSENSUS * N)
@@ -151,7 +151,7 @@ class PedestrianProtectionAutomaton:
         return count >= MIN_VAL * k
     
     def _c_distance(self) -> bool:
-        """Check if distance is critical (Z3-matching implementation)"""
+        """Check if distance is critical"""
         if len(self.B_TTC) == 0:
             return False
         limit = int(C_DISTANCE_CONSENSUS * N)

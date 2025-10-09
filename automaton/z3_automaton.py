@@ -86,7 +86,7 @@ def threshold_constraints():
         TH_C >= 0,
         TH_C <= 1,
         
-        # MIN_VAL is a probability
+        # MIN_VAL determines the number of agreeing frames for distance classification
         MIN_VAL >= 0.8,
         MIN_VAL <= 1,
         
