@@ -205,3 +205,67 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# LaTeX intermediate and auxiliary files
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.*
+*.toc
+*.lot
+*.lof
+*.nav
+*.snm
+*.vrb
+*.xdv
+
+# Glossary, nomenclature, and index files
+*.acn
+*.acr
+*.alg
+*.glg
+*.glo
+*.gls
+*.ist
+*.lof
+*.lot
+*.nlo
+*.nls
+
+# Package-generated files
+*.maf
+*.mtc*
+*.idx
+*.ilg
+*.ind
+*.out.ps
+*.upa
+*.upb
+
+# Latexmk specific
+*.pdfsync
+*.dvi
+*.ps
+*.pdf
+
+# Temporary files from editors or OS
+*~
+*.swp
+*.swo
+*.bak
+*.tmp
+*.backup
+Thumbs.db
+.DS_Store
+
+# Auxiliary directories (if applicable)
+latex.out/
+build/
+output/
