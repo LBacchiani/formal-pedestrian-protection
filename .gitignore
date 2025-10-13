@@ -217,7 +217,7 @@ __marimo__/
 *.log
 *.out
 *.run.xml
-*.synctex.*
+*.synctex*
 *.toc
 *.lot
 *.lof
