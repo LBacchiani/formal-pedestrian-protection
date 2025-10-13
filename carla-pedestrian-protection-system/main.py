@@ -16,6 +16,7 @@ import requests
 import paho.mqtt.client as mqtt
 import json
 
+torch.cuda.set_device(1)   # usa la GPU con indice 1
 
 #########################################
 ################ Classes ################
@@ -39,7 +40,7 @@ class Mode(Enum):
 ################# Config #################
 ##########################################
 
-MODE = Mode.KEYBOARD
+MODE = Mode.STEERING_WHEEL
 CAMERA_DEBUG = True
 NUM_WALKERS = 75
 
@@ -50,7 +51,7 @@ TOPIC_REC = "action"
 
 CAMERA_WIDTH = 1080
 CAMERA_HEIGHT = 720
-VIEW_FOV = 80
+VIEW_FOV = 85
 
 # Stato attuale del veicolo in base ai messaggi MQTT
 current_action = "normal"
@@ -411,8 +412,8 @@ def detect_pedestrians(image):
     - Usa automaticamente GPU se disponibile
     - Se è su CPU, riduce la risoluzione (imgsz=480)
     """
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    imgsz = 640 if device == 'cuda' else 480
+    device = 'cuda' 
+    imgsz = 640
     results = model.predict(image, device=device, imgsz=imgsz, verbose=False)[0]
 
     detections = []
@@ -483,16 +484,16 @@ def send_mqtt_async(payload: dict):
 def max_yaw_allowed(distance):
     """
     Restituisce l'angolo massimo (in gradi) che consideriamo crossing.
-    - 0 m  → ±35°
-    - 25 m → ±0° (oltre nessun crossing)
+    - 0 m  → +-37°
+    - 25 m → +-0° (oltre nessun crossing)
     """
     if distance <= 0:
-        return 35.0
-    elif distance >= 25.0:
+        return 37.0
+    elif distance >= 30.0:
         return 0.0
     else:
-        # Interpolazione lineare da 35° (0 m) → 0° (25 m)
-        return 35.0 * (1 - distance / 25.0)
+        # Interpolazione lineare da 37° (0 m) → 0° (30 m)
+        return 37.0 * (1 - distance / 30.0)
 
 
 def process_image():
@@ -506,7 +507,7 @@ def process_image():
     global input_rgb_image, input_depth_image, processed_output
 
     last_inference_time = 0.0
-    target_dt = 0.10  # 10Hz
+    target_dt = 0.125  # 10Hz
     crossing = 0
 
     print("[PROCESS] Avviato thread di elaborazione immagini...")
@@ -519,12 +520,11 @@ def process_image():
             depth_image = input_depth_image
 
         if rgb_image is None or depth_image is None:
-            time.sleep(0.02)
             continue
 
         now = time.time()
         if now - last_inference_time < target_dt:
-            time.sleep(0.01)
+            time.sleep(0.1)
             continue
         last_inference_time = now
 
@@ -551,17 +551,6 @@ def process_image():
             distance = get_distance_to_pedestrian_centroid(centroid, depth_array)
             yaw, pitch = pixel_to_angle(centroid[0], centroid[1], rgb_camera.calibration)
 
-            # ottieni angolo di sterzo del veicolo
-            steer_norm = vehicle.get_control().steer  # range [-1, +1]
-            steer_angle_deg = steer_norm * 35.0       # ±35° sterzo max
-
-            # calcola deviazione yaw rispetto alla direzione del volante
-            yaw_deg = math.degrees(yaw)
-            relative_yaw = yaw_deg - steer_angle_deg  # ruota il cono nella direzione di sterzo
-
-            threshold = max_yaw_allowed(distance)
-            crossing = 1 if abs(relative_yaw) <= threshold else 0
-
             time_to_collision = distance / vehicle_speed_mps if vehicle_speed_mps > 0.01 else float('inf')
 
             detected_pedestrians.append(Pedestrian(
@@ -582,11 +571,25 @@ def process_image():
 
         # angoli e TTC del più vicino
         if closest_ped:
-            yaw, pitch = closest_ped.yaw, closest_ped.pitch
+            yaw_rad = closest_ped.yaw
             ttc_camera = closest_ped.time_to_collision
-            # crossing coerente col più vicino
-            yaw_deg_closest = abs(math.degrees(yaw))
-            crossing = 1 if yaw_deg_closest <= max_yaw_allowed(closest_ped.distance) else 0
+
+            # sterzo veicolo
+            steer_norm = vehicle.get_control().steer  # [-1,+1]
+            steer_angle_deg = steer_norm * 35.0       # ±35° (asse ruote)
+
+            # angolo orizzontale del pedone nel frame camera
+            yaw_deg = math.degrees(yaw_rad) 
+
+            # deviazione rispetto all'asse ruote
+            relative_yaw = yaw_deg - steer_angle_deg
+
+            # ampiezza del cono visivo in base alla distanza
+            threshold = max_yaw_allowed(closest_ped.distance)
+
+            # crossing: pedone entro il cono centrato sulle ruote
+            crossing = 1 if abs(relative_yaw) <= threshold else 0
+
         else:
             yaw, pitch, ttc_camera, crossing = None, None, None, 0
             
@@ -602,17 +605,17 @@ def process_image():
             "is_crossing": crossing if conf else 0
         }
 
-        send_mqtt_async(payload)
+        # send_mqtt_async(payload)
 
-        # # stampa di debug
-        # print("[SUMMARY]",
-        #       f"speed={vehicle_speed_mps:.2f} m/s",
-        #       f"confidence={payload['confidence']:.2f}",
-        #       f"dist={payload['camera_distance']:.1f}m" if payload['camera_distance'] else "dist=None",
-        #       f"yaw={payload['camera_yaw_deg']:.1f}°" if payload['camera_yaw_deg'] else "yaw=None",
-        #       f"ttc={payload['ttc']:.2f}" if payload['ttc'] else "ttc=None",
-        #       f"is_crossing={payload['is_crossing']}"
-        # )
+        # stampa di debug
+        print("[SUMMARY]",
+              f"speed={vehicle_speed_mps:.2f} m/s",
+              f"confidence={payload['confidence']:.2f}",
+              f"dist={payload['camera_distance']:.1f}m" if payload['camera_distance'] else "dist=None",
+              f"yaw={payload['camera_yaw_deg']:.1f}°" if payload['camera_yaw_deg'] else "yaw=None",
+              f"ttc={payload['ttc']:.2f}" if payload['ttc'] else "ttc=None",
+              f"is_crossing={payload['is_crossing']}"
+        )
 
         # salva per rendering
         with processed_output_lock:
@@ -747,6 +750,24 @@ class GameLoop(object):
                                     cv2.rectangle(
                                         bgr_for_display, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2
                                     )
+
+                            # Disegna bounding boxes YOLO
+                            if bgr_for_display is not None and dets:
+                                for _, bbox, _ in dets:
+                                    cv2.rectangle(
+                                        bgr_for_display, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2
+                                    )
+
+                                # === QUI: disegna anche l'asse ruote ===
+                                steer_angle_deg = vehicle.get_control().steer * 35.0
+                                cv2.line(
+                                    bgr_for_display,
+                                    (CAMERA_WIDTH // 2, CAMERA_HEIGHT),
+                                    (CAMERA_WIDTH // 2 + int(math.tan(math.radians(steer_angle_deg)) * 300),
+                                    CAMERA_HEIGHT - 300),
+                                    (0, 0, 255), 2
+                                )
+                                # linea rossa = direzione asse ruote
 
                             # Mostra finestre
                             if bgr_for_display is not None:
