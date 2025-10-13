@@ -16,12 +16,6 @@ import requests
 import paho.mqtt.client as mqtt
 import json
 
-torch.cuda.set_device(1)   # usa la GPU con indice 1
-
-#########################################
-################ Classes ################
-#########################################
-
 @dataclass
 class Pedestrian:
     x: int
@@ -36,10 +30,6 @@ class Mode(Enum):
     KEYBOARD = 1
     STEERING_WHEEL = 2
 
-##########################################
-################# Config #################
-##########################################
-
 MODE = Mode.STEERING_WHEEL
 CAMERA_DEBUG = True
 NUM_WALKERS = 75
@@ -51,15 +41,12 @@ TOPIC_REC = "action"
 
 CAMERA_WIDTH = 1080
 CAMERA_HEIGHT = 720
-VIEW_FOV = 85
+VIEW_FOV = 80
 
-# Stato attuale del veicolo in base ai messaggi MQTT
 current_action = "normal"
 level_brk = 0.0
 mqtt_last_update = 0.0
 
-
-# ---- MQTT setup ----
 mqtt_client = mqtt.Client()
 try:
     mqtt_client.connect(BROKER, PORT, 60)
@@ -74,7 +61,6 @@ def on_mqtt_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
         action = payload.get("action", "").lower()
-        # Livello di frenata (solo se presente e valido)
         lvl = payload.get("level", None)
         if lvl is not None:
             try:
@@ -116,7 +102,7 @@ PEDESTRIAN = "DET"  # DET || "RANDOM"
 
 ### Modalità Sole ### 
 
-### Modalità notte
+### Modalità notte ###
 # weather = carla.WeatherParameters(
 #     cloudiness=90.0,         # cielo molto coperto
 #     precipitation=0.0,      # pioggia
@@ -125,7 +111,7 @@ PEDESTRIAN = "DET"  # DET || "RANDOM"
 #     sun_altitude_angle=-20.0, # sotto l'orizzonte = notte
 #     fog_density=0.0,        # densità nebbia (0–100)
 # )
-### Modalità Notte con nebbia
+### Modalità Notte con nebbia###
 # weather = carla.WeatherParameters(
 #     cloudiness=90.0,         # cielo molto coperto
 #     precipitation=80.0,      # pioggia forte
@@ -137,9 +123,6 @@ PEDESTRIAN = "DET"  # DET || "RANDOM"
 #     fog_falloff=1.5          # quanto la nebbia si intensifica con la distanza
 # )
 
-
-
-# Applica al mondo
 world = client.get_world()
 # world.set_weather(weather)
 
@@ -163,9 +146,6 @@ input_depth_image_lock = threading.Lock()
 processed_output = None
 processed_output_lock = threading.Lock()
 
-###########################################
-############ Utility functions ############
-###########################################
 def emergency_brake():
     global vehicle
     control = carla.VehicleControl(throttle=0.0, brake=1.0)
@@ -173,11 +153,6 @@ def emergency_brake():
 
 
 def remove_all(world: carla.World):
-    """
-    Removes all actors from the CARLA world, including vehicles, sensors, and pedestrians.
-    Args:
-        world (carla.World): The CARLA world object from which actors will be removed.
-    """
     for a in world.get_actors().filter('vehicle.*'):
         a.destroy()
     for a in world.get_actors().filter('sensor.*'):
@@ -189,10 +164,6 @@ def remove_all(world: carla.World):
 
 
 def carla_transform_to_matrix(transform: carla.Transform) -> np.ndarray:
-    """
-    Converte carla.Transform in matrice 4x4 (mondo <- oggetto).
-    Rotazioni in ordine yaw(Z) -> pitch(Y) -> roll(X), sistema CARLA (x fwd, y right, z up).
-    """
     r = transform.rotation
     t = transform.location
 
@@ -224,18 +195,17 @@ def world_to_pixel(
     world2cam = np.linalg.inv(M_cam)
 
     p_world = np.array([loc_world.x, loc_world.y, loc_world.z, 1.0])
-    p_cam = world2cam @ p_world  # [X, Y, Z] con X forward, Y right, Z up
+    p_cam = world2cam @ p_world
 
     X, Y, Z = p_cam[0], p_cam[1], p_cam[2]
     if X <= 0:
-        return None  # dietro la camera
+        return None
 
     fx, fy = K[0, 0], K[1, 1]
     cx, cy = K[0, 2], K[1, 2]
 
-    # Proiezione pinhole
     u = cx + fx * (Y / X)
-    v = cy - fy * (Z / X)  # attenzione segno verticale
+    v = cy - fy * (Z / X)
 
     if 0 <= u < CAMERA_WIDTH and 0 <= v < CAMERA_HEIGHT:
         return int(u), int(v)
@@ -257,7 +227,6 @@ def setup_camera(car: carla.Vehicle):
     depth_bp.set_attribute('fov', str(VIEW_FOV))
     depth_camera = world.spawn_actor(depth_bp, camera_transform, attach_to=car)
 
-    # usa il FOV reale impostato
     fov = float(VIEW_FOV)
     calibration = np.identity(3)
     calibration[0, 2] = CAMERA_WIDTH / 2.0
@@ -282,7 +251,6 @@ def spawn_walker(world: carla.World):
 
     walker_bp = random.choice(walker_blueprints)
 
-    # assegna velocità
     if walker_bp.has_attribute("speed"):
         speed = random.uniform(0.8, 2.0)
         walker_bp.set_attribute('speed', str(speed))
@@ -402,16 +370,8 @@ def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist
 
     return walker, controller, existing_positions
 
-##########################################
-############ Image Processing ############
-##########################################
 
 def detect_pedestrians(image):
-    """
-    Rileva pedoni in un'immagine usando YOLOv8.
-    - Usa automaticamente GPU se disponibile
-    - Se è su CPU, riduce la risoluzione (imgsz=480)
-    """
     device = 'cuda' 
     imgsz = 640
     results = model.predict(image, device=device, imgsz=imgsz, verbose=False)[0]
@@ -446,14 +406,6 @@ def pixel_to_angle(u: int, v: int, K: np.ndarray) -> Tuple[float, float]:
     """
     Converte un pixel immagine (u,v) in angolo orizzontale (yaw) e verticale (pitch)
     rispetto all'asse ottico della camera.
-
-    Args:
-        u (int): coordinata x del pixel
-        v (int): coordinata y del pixel
-        K (np.ndarray): matrice intrinseca 3x3 della camera
-
-    Returns:
-        (yaw, pitch) in radianti
     """
     fx, fy = K[0, 0], K[1, 1]
     cx, cy = K[0, 2], K[1, 2]
@@ -497,13 +449,6 @@ def max_yaw_allowed(distance):
 
 
 def process_image():
-    """
-    Thread di elaborazione immagini:
-      - converte i frame RGB/Depth in numpy (zero-copy)
-      - esegue YOLO ogni target_dt
-      - calcola distanza, TTC e flag crossing
-      - salva il risultato per il rendering e la logica ADAS
-    """
     global input_rgb_image, input_depth_image, processed_output
 
     last_inference_time = 0.0
@@ -541,9 +486,7 @@ def process_image():
         vehicle_speed_mps = math.sqrt(vehicle_speed.x**2 + vehicle_speed.y**2 + vehicle_speed.z**2)
 
         # detection pedoni (YOLO)
-
         detections = detect_pedestrians(rgb_array)
-
         detected_pedestrians: List[Pedestrian] = []
 
         # elaborazione pedoni
@@ -624,10 +567,6 @@ def process_image():
                 "depth_image": depth_array,
                 "detections": detections
             }
-
-##########################################
-########### Gameloop and Setup ###########
-##########################################
 
 class GameLoop(object):
     def __init__(self, args):
@@ -757,8 +696,6 @@ class GameLoop(object):
                                     cv2.rectangle(
                                         bgr_for_display, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2
                                     )
-
-                                # === QUI: disegna anche l'asse ruote ===
                                 steer_angle_deg = vehicle.get_control().steer * 35.0
                                 cv2.line(
                                     bgr_for_display,
@@ -767,9 +704,7 @@ class GameLoop(object):
                                     CAMERA_HEIGHT - 300),
                                     (0, 0, 255), 2
                                 )
-                                # linea rossa = direzione asse ruote
 
-                            # Mostra finestre
                             if bgr_for_display is not None:
                                 cv2.imshow('RGB image', bgr_for_display)
                             if depth_for_display is not None:
@@ -801,7 +736,6 @@ class GameLoop(object):
                 control = carla.VehicleControl()
 
                 # Applica comportamento in base allo stato MQTT
-
                 if current_action == "emergency_brake":
                     control.throttle = 0.0
                     control.brake = 1.0
@@ -823,7 +757,6 @@ class GameLoop(object):
                 self.render(clock)
 
         finally:
-            # Cleanup finale
             if self.original_settings:
                 self.sim_world.apply_settings(self.original_settings)
             if self.world is not None:
@@ -887,14 +820,9 @@ def setup():
         help='Fps of the client (default: 30)')
     args = argparser.parse_args()
 
-    # Set window resolution
     args.res = '1280x720'
-    args.width, args.height = CAMERA_WIDTH, CAMERA_HEIGHT #[int(x) for x in args.res.split('x')]
-
-    # Set vehicle filter
+    args.width, args.height = CAMERA_WIDTH, CAMERA_HEIGHT
     args.filter = 'vehicle.mercedes.coupe_2020'
-
-    # Set synchronous mode
     args.sync = True
 
     log_level = mc.logging.DEBUG if args.debug else mc.logging.INFO
@@ -903,9 +831,6 @@ def setup():
 
     return GameLoop(args)
 
-##########################################
-############ Simulation Setup ############
-##########################################
 existing_positions = []
 if PEDESTRIAN == "DET":
     for _ in range(NUM_WALKERS):
@@ -914,10 +839,7 @@ else:
     for _ in range(NUM_WALKERS):
         _, _ = spawn_walker(world)
 
-# setup the simulation environment
 game_loop = setup()
-
-# get the vehicle and attach the camera
 vehicle = world.get_actors().filter('vehicle.*')[0]
 rgb_camera, depth_camera = setup_camera(vehicle)
 
