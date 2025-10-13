@@ -235,7 +235,7 @@ where $k = \lceil n \cdot \mathsf{RC\_DISTANCE\_CONSENSUS} \rceil$.
 The predicate $\mathsf{c\_distance}$ is defined as follows. Recall, $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
 \[
     \begin{aligned}
-        \mathsf{c\_distance}&(\{B_C, B_{TTC}, B_{cs}, \mathsf{sns}, s_d, s_c, s_u, t\}) = \sum_{i=0}^{k} P(TTC_i \ge \mathsf{TH\_TTC\_c}) \geq \lceil k \cdot \mathsf{CONSENSUS}\rceil
+        \mathsf{c\_distance}&(\{B_C, B_{TTC}, B_{cs}, \mathsf{sns}, s_d, s_c, s_u, t\}) = \sum_{i=0}^{k} P(TTC_i \leq \mathsf{TH\_TTC\_c}) \geq \lceil k \cdot \mathsf{CONSENSUS}\rceil
     \end{aligned}
 \]
 where $k = \lceil n \cdot \mathsf{C\_DISTANCE\_CONSENSUS} \rceil$.    
@@ -260,7 +260,7 @@ where $k = \lceil n \cdot \mathsf{C\_DISTANCE\_CONSENSUS} \rceil$.
 \begin{definition}[Uncertain data]
     The predicate $\mathsf{uncertain}$ as defined as follows.
     \[
-        \mathsf{uncertain}(x) = \neg \mathsf{s\_distance}(x) \lor \neg \mathsf{s\_r\_distance}(x) \lor \neg \mathsf{r\_c\_distance}(x) \lor \neg \mathsf{c\_distance}(x)
+        \mathsf{uncertain}(x) = \neg \mathsf{s\_distance}(x) \land \neg \mathsf{s\_r\_distance}(x) \land \neg \mathsf{r\_c\_distance}(x) \land \neg \mathsf{c\_distance}(x)
     \]
 \end{definition}
 
@@ -387,10 +387,14 @@ G(e_{10}) &= G(e_4) \\
 G(e_{11}) &= G(e_5) \\ 
 G(e_{12}) &= G(e_6) \\
 G(e_{13}) &= G(e_7) \\ 
-G(e_{14}) &= G(e_2) \\ 
+G(e_{14}) &= G(e_2) \\
 G(e_{15}) &= \{x \in X \mid \big(\mathsf{valid\_d}(x) \land ((\neg \mathsf{valid\_c}(x) \land \mathsf{r\_c\_distance}(x)) \lor (\mathsf{valid\_c}(x) \land \mathsf{s\_r\_distance}(x)) \lor \\
 &\qquad\qquad (\mathsf{uncertain}(x) \land s_u < \mathsf{MAX\_UNCERTAIN})) \land \mathsf{sns} = 1 \land t = 0 \big) \lor \\
 &\qquad\qquad(\mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ}) \} \\
+\end{aligned}
+\]
+\[
+\begin{aligned}
 G(e_{16}) &= G(e_4) \\
 G(e_{17}) &= G(e_5) \\
 G(e_{18}) &= G(e_6) \\
@@ -402,13 +406,13 @@ G(e_{22}) &= \{x \in X \mid \big((\mathsf{valid\_d}(x) \land \neg \mathsf{valid\
 &\qquad\qquad(\mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ}) \} \\
 G(e_{23}) &= G(e_5) \\
 G(e_{24}) &= G(e_6) \\
-G(e_{25}) &= \{x \in X \mid (\neg \mathsf{valid\_d}(x) \lor \neg \mathsf{valid\_c}(x) \lor s_u \ge \mathsf{MAX\_UNCERTAIN}) \land \mathsf{sns} = 1 \land t = 0 \}\\
-G(e_{26}) &= \{x \in X \mid (\neg \mathsf{valid\_d}(x) \lor \neg \mathsf{valid\_c}(x) \lor s_u \ge \mathsf{MAX\_UNCERTAIN}) \land \mathsf{sns} = 1 \land t = 0 \}\\
+G(e_{25}) &= \{x \in X \mid (\neg \mathsf{valid\_d}(x) \lor \neg \mathsf{valid\_c}(x) \lor \mathsf{s\_distance}(x) \lor s_u \ge \mathsf{MAX\_UNCERTAIN}) \land \mathsf{sns} = 1 \land t = 0 \}\\
+G(e_{26}) &= \{x \in X \mid \mathsf{valid\_d}(x) \land \mathsf{valid\_c}(x) \land \mathsf{s\_r\_distance}(x) \land \mathsf{sns} = 1 \land t = 0 \}\\
 G(e_{27}) &= \{x \in X \mid \big(\mathsf{valid\_d}(x) \land \mathsf{valid\_c}(x) \land (\mathsf{r\_c\_distance}(x) \lor (\mathsf{uncertain}(x) \land \\ 
 &\qquad\qquad s_u < \mathsf{MAX\_UNCERTAIN}))  \land \mathsf{sns} = 1 \land t = 0 \big) \lor (\mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ}) \} \\
 G(e_{28}) &= G(e_6) \\
 G(e_{29}) &= \{ x \in X \mid (\neg \mathsf{valid\_d}(x) \lor \neg \mathsf{valid\_c}(x)) \land \mathsf{sns} = 1 \land t = 0 \} \\
-G(e_{30}) &= \{ x \in X \mid \mathsf{valid\_c}(x) \lor (\mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ}) \} \\
+G(e_{30}) &= \{ x \in X \mid (\mathsf{valid\_c}(x) \land \mathsf{sns} = 1 \land t = 0) \lor (\mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ}) \} \\
 \end{aligned}
 \]
 

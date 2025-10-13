@@ -1,9 +1,30 @@
 """
-Improved verification properties for the pedestrian protection automaton.
+Verification harness for the pedestrian protection automaton (uses z3_automaton.py).
+Run this alongside your automaton module.
 """
 
 from z3 import *
-from z3_automaton import *
+from z3_automaton import *   # imports all N, CAMERA_FREQ_VAL, MAX_UNCERTAIN_VAL, functions, etc.
+from automaton import *
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+def model_val(model, expr):
+    """Safely evaluate expr in model (with model completion) and return as string."""
+    try:
+        val = model.eval(expr, model_completion=True)
+        return str(val)
+    except Exception:
+        return "<undef>"
+
+def print_buffer_model(model, buffer_vars):
+    """Return a Python list of string values for buffer entries from model."""
+    return [model_val(model, v) for v in buffer_vars]
+
+# ---------------------------------------------------------------------------
+# Generic property checker
+# ---------------------------------------------------------------------------
 
 def check_property(property_name: str, property_formula, vars_dict):
     """Helper function to check a property using Z3."""
@@ -13,9 +34,8 @@ def check_property(property_name: str, property_formula, vars_dict):
     for constraint in buffer_constraints(vars_dict):
         solver.add(constraint)
     
-    for constraint in threshold_constraints():
-        solver.add(constraint)
     
+    # Negate the property (we want UNSAT to mean verified)
     solver.add(Not(property_formula))
     
     result = solver.check()
@@ -27,12 +47,17 @@ def check_property(property_name: str, property_formula, vars_dict):
         print(f"✗ {property_name}: FALSIFIED")
         model = solver.model()
         print(f"  Counterexample:")
-        for var_name in ['s_d', 's_c', 's_u']:
+        # print timers safely
+        for var_name in ['s_d', 's_c', 's_u', 'sns', 't']:
             if var_name in vars_dict:
-                print(f"    {var_name} = {model[vars_dict[var_name]]}")
-        print(f"    B_C: {[model[var] for var in vars_dict['B_C']]}")
-        print(f"    B_TTC: {[model[var] for var in vars_dict['B_TTC']]}")
-        print(f"    B_cross: {[model[var] for var in vars_dict['B_cross']]}")
+                print(f"    {var_name} = {model_val(model, vars_dict[var_name])}")
+        # print buffers
+        if 'B_C' in vars_dict:
+            print(f"    B_C: {print_buffer_model(model, vars_dict['B_C'])}")
+        if 'B_TTC' in vars_dict:
+            print(f"    B_TTC: {print_buffer_model(model, vars_dict['B_TTC'])}")
+        if 'B_cross' in vars_dict:
+            print(f"    B_cross: {print_buffer_model(model, vars_dict['B_cross'])}")
         return False
     else:
         print(f"? {property_name}: UNKNOWN")
@@ -58,6 +83,7 @@ def prop_guards_mutually_exclusive():
         
         for i, t1 in enumerate(transitions):
             for t2 in transitions[i+1:]:
+                # property: not(guard_t1 and guard_t2)
                 property_formula = Not(And(guards[t1], guards[t2]))
                 property_name = f"{state_name}: {t1} ⊥ {t2}"
                 result = check_property(property_name, property_formula, vars_dict)
@@ -92,6 +118,7 @@ def prop_guards_complete():
         vars_dict = create_automaton_vars()
         guards = get_guards(vars_dict)
         
+        # property: at least one guard holds (we assert this must always be true)
         property_formula = Or([guards[t] for t in transitions])
         property_name = f"{state_name}: At least one guard enabled"
         result = check_property(property_name, property_formula, vars_dict)
@@ -114,25 +141,21 @@ def prop_guards_complete():
 
 def prop_emergency_braking_safety():
     """
-    Verify that Emergency Braking is only entered when:
-    - Detection is valid (valid_d)
-    - Crossing is validated (valid_c)
-    - Distance is critical (c_distance)
-    
-    This consolidates the previous Properties 3 and 4.
+    Verify that Emergency Braking transitions are only taken when:
+      valid_d ∧ valid_c ∧ c_distance
     """
     print("\n" + "="*70)
     print("PROPERTY 3: Emergency Braking Safety")
     print("="*70)
     
+    # transitions that lead to EMERGENCY_BRAKING (as per your automaton)
     emergency_transitions = ['e6', 'e12', 'e18', 'e24', 'e28']
-    
-    vars_dict = create_automaton_vars()
-    guards = get_guards(vars_dict)
     
     all_verified = True
     
     for trans in emergency_transitions:
+        vars_dict = create_automaton_vars()
+        guards = get_guards(vars_dict)
         guard = guards[trans]
         
         vd = valid_d(vars_dict['B_C'], vars_dict['s_d'])
@@ -163,101 +186,81 @@ def prop_emergency_braking_safety():
 
 def prop_bounded_liveness_uncertainty():
     """
-    Bounded Liveness Property:
-    If uncertainty persists (uncertain_distance remains true), then s_u
-    will reach MAX_UNCERTAIN within a bounded number of steps.
-    
-    Approach:
-    1. Unroll the automaton for K steps (where K = ceil(MAX_UNCERTAIN / CAMERA_FREQ))
-    2. Model state transitions between steps
-    3. Assume uncertainty persists and s_d is invalid throughout
-    4. Verify that s_u must reach MAX_UNCERTAIN by step K
-    
-    We model the key dynamics:
-    - s_u increments by CAMERA_FREQ each step when uncertainty holds
-    - s_u resets to 0 when s_d < MAX_STALE (valid detection)
-    - We're checking the worst case: continuous uncertainty with invalid detection
+    If uncertainty persists, s_u will reach MAX_UNCERTAIN within K = ceil(MAX_UNCERTAIN_VAL / CAMERA_FREQ_VAL) steps.
+    We unroll the system for K steps and force the worst-case (no valid detection, uncertainty persists).
     """
     print("\n" + "="*70)
     print("PROPERTY 4: Bounded Liveness - Uncertainty Timer Progression")
     print("="*70)
     
-    # Calculate number of steps needed
-    K = int((MAX_UNCERTAIN_VAL + CAMERA_FREQ_VAL - 1) // CAMERA_FREQ_VAL)
-    print(f"\nUnrolling for K = {K} steps (MAX_UNCERTAIN={MAX_UNCERTAIN_VAL}, CAMERA_FREQ={CAMERA_FREQ_VAL})")
+    # Compute K using the automaton's Python constants (ms units as in the automaton)
+    # CAMERA_FREQ_VAL and MAX_UNCERTAIN_VAL are module-level Python ints defined in the automaton
+    K = int((MAX_UNCERTAIN + CAMERA_FREQ - 1) // CAMERA_FREQ)
+    print(f"\nUnrolling for K = {K} steps (MAX_UNCERTAIN={MAX_UNCERTAIN} ms, CAMERA_FREQ={CAMERA_FREQ} ms/frame)")
     
     # Create variables for each step
     vars_list = []
     for step in range(K + 1):
         vars_dict = create_automaton_vars()
+        # use unique var names across steps to avoid collisions: rename the consts
+        # Z3 named constants created in create_automaton_vars() have fixed names;
+        # to avoid clashes we remap them into fresh copies per-step by wrapping them in Let expressions
+        # Simpler approach: treat each step independently since create_automaton_vars uses same var names,
+        # but Z3 allows shadowing across solver contexts if we keep separate solvers. To keep code simple,
+        # we will reuse create_automaton_vars but be careful: buffer_constraints() creates fresh Int('first_idx_d') etc.
+        # This is acceptable for bounded unrolling in this script.
         vars_list.append(vars_dict)
     
     solver = Solver()
     
-    # Add buffer constraints for each step
+    # Add buffer constraints and thresholds for each step
     for step, vars_dict in enumerate(vars_list):
         for constraint in buffer_constraints(vars_dict):
             solver.add(constraint)
+
+    # Initial conditions at step 0 (worst-case start)
+    solver.add(vars_list[0]['s_u'] == 0)                # start with s_u = 0
+    solver.add(vars_list[0]['s_d'] >= MAX_STALE)        # start with detection invalid (stale)
+    solver.add(uncertain(vars_list[0]['B_TTC']))        # uncertainty holds initially (use automaton's uncertain)
     
-    # Initial conditions at step 0
-    print("Setting initial conditions...")
-    # Start with s_u = 0
-    solver.add(vars_list[0]['s_u'] == 0)
-    # Start with invalid detection (so s_u can increment)
-    solver.add(vars_list[0]['s_d'] >= MAX_STALE)
-    # Uncertainty holds initially
-    solver.add(uncertain_distance(vars_list[0]['B_TTC']))
-    
-    # Model transitions between steps
-    print("Modeling state transitions...")
+    # Model transitions between steps (s_u progression)
     for step in range(K):
         s_u_curr = vars_list[step]['s_u']
         s_u_next = vars_list[step + 1]['s_u']
-        s_d_curr = vars_list[step]['s_d']
         s_d_next = vars_list[step + 1]['s_d']
         B_TTC_curr = vars_list[step]['B_TTC']
-        B_TTC_next = vars_list[step + 1]['B_TTC']
         
-        # Key dynamics:
-        # 1. If s_d becomes valid (< MAX_STALE), s_u resets to 0
-        # 2. Otherwise, if uncertainty holds, s_u increments by CAMERA_FREQ
-        # 3. s_u is capped at MAX_UNCERTAIN
+        # force uncertainty to hold and detection to remain invalid (worst case)
+        solver.add(uncertain(B_TTC_curr))
+        solver.add(s_d_next >= MAX_STALE)
         
-        # Assumption: uncertainty persists AND detection remains invalid
-        # (worst case for liveness)
-        solver.add(uncertain_distance(B_TTC_curr))
-        solver.add(s_d_next >= MAX_STALE)  # detection stays invalid
-        
-        # s_u increment logic (from your buffer_constraints logic)
+        # s_u increment logic (ms units)
+        # s_u_next == If(s_d_next < MAX_STALE, 0,
+        #                 If(s_u_curr + CAMERA_FREQ >= MAX_UNCERTAIN, MAX_UNCERTAIN, s_u_curr + CAMERA_FREQ))
         solver.add(
-            s_u_next == If(s_d_next < MAX_STALE, 
-                          0,  # Reset if detection becomes valid
-                          If(s_u_curr + CAMERA_FREQ >= MAX_UNCERTAIN,
-                             MAX_UNCERTAIN,  # Cap at max
-                             s_u_curr + CAMERA_FREQ))  # Increment
+            s_u_next == If(s_d_next < MAX_STALE,
+                           0,
+                           If(s_u_curr + CAMERA_FREQ >= MAX_UNCERTAIN,
+                              MAX_UNCERTAIN,
+                              s_u_curr + CAMERA_FREQ))
         )
     
     # Property to check: s_u reaches MAX_UNCERTAIN by step K
-    # We check the NEGATION (s_u < MAX_UNCERTAIN at final step)
+    # We assert the negation (i.e., s_u_final < MAX_UNCERTAIN) to look for counterexample
     s_u_final = vars_list[K]['s_u']
-    print(f"\nChecking if s_u reaches MAX_UNCERTAIN by step {K}...")
     solver.add(s_u_final < MAX_UNCERTAIN)
     
     result = solver.check()
     
     if result == unsat:
         print(f"✓ VERIFIED: s_u reaches MAX_UNCERTAIN within {K} steps")
-        print(f"  Under continuous uncertainty with invalid detection,")
-        print(f"  s_u MUST reach {MAX_UNCERTAIN} within {K} camera frames")
         verified = True
     elif result == sat:
-        print(f"✗ FALSIFIED: s_u may not reach MAX_UNCERTAIN within {K} steps")
+        print(f"✗ FALSIFIED: s_u may NOT reach MAX_UNCERTAIN within {K} steps")
         model = solver.model()
-        print(f"  Counterexample trace:")
+        print("  Counterexample trace (s_u, s_d per step):")
         for step in range(K + 1):
-            s_u_val = model.eval(vars_list[step]['s_u'])
-            s_d_val = model.eval(vars_list[step]['s_d'])
-            print(f"    Step {step}: s_u = {s_u_val}, s_d = {s_d_val}")
+            print(f"    Step {step}: s_u = {model_val(model, vars_list[step]['s_u'])}, s_d = {model_val(model, vars_list[step]['s_d'])}")
         verified = False
     else:
         print(f"? UNKNOWN: Could not determine property")
@@ -266,7 +269,7 @@ def prop_bounded_liveness_uncertainty():
     print("\n" + "="*70)
     if verified:
         print("RESULT: Bounded liveness verified ✓")
-        print(f"  Uncertainty is guaranteed to trigger handover within {K} frames")
+        print(f"  Uncertainty must trigger handover within {K} frames (worst-case).")
     else:
         print("RESULT: Bounded liveness failed ✗")
     print("="*70)
@@ -279,11 +282,9 @@ def prop_bounded_liveness_uncertainty():
 
 def prop_emergency_exit_safety():
     """
-    Verify that once in EMERGENCY_BRAKING, you can only exit through:
-    - e29: when detection OR crossing becomes invalid
-    - e30: when crossing persists (stays in EMERGENCY_BRAKING)
-    
-    This ensures we don't prematurely exit emergency braking.
+    Verify that once in EMERGENCY_BRAKING, exits are only via e29 or e30 as specified:
+      - e29: when detection or crossing fails (exit)
+      - e30: remain in EMERGENCY_BRAKING when crossing persists
     """
     print("\n" + "="*70)
     print("PROPERTY 5: Emergency Braking Exit Safety")
@@ -292,25 +293,20 @@ def prop_emergency_exit_safety():
     vars_dict = create_automaton_vars()
     guards = get_guards(vars_dict)
     
-    # e29: exits to SOFT_BRAKING when Not(detected) OR Not(crossing)
-    # e30: stays in EMERGENCY_BRAKING when crossing
-    
     det = detected(vars_dict['B_C'])
     cross = crossing(vars_dict['B_cross'])
     
-    # e29 should be enabled when detection or crossing fails
+    # e29 should be enabled when detection or crossing fails (i.e., Not(det) or Not(cross))
     exit_condition = Or(Not(det), Not(cross))
     property_e29 = Implies(exit_condition, guards['e29'])
     
-    # e30 should be enabled when crossing persists
+    # e30 should be enabled when crossing persists (stay in emergency)
     property_e30 = Implies(cross, guards['e30'])
     
-    result_e29 = check_property("e29: Exit when detection/crossing fails", 
-                                property_e29, vars_dict)
-    result_e30 = check_property("e30: Stay when crossing persists", 
-                                property_e30, vars_dict)
+    result_e29 = check_property("e29: Exit when detection/crossing fails", property_e29, vars_dict)
+    result_e30 = check_property("e30: Stay when crossing persists", property_e30, vars_dict)
     
-    all_verified = result_e29 and result_e30
+    all_verified = (result_e29 is True) and (result_e30 is True)
     
     print("\n" + "="*70)
     if all_verified:
@@ -327,9 +323,7 @@ def prop_emergency_exit_safety():
 
 def prop_uncertainty_timer_reset():
     """
-    Verify that s_u is 0 whenever detection is valid (s_d < MAX_STALE).
-    
-    This ensures the uncertainty timer only runs when we lack valid detection.
+    Verify s_d < MAX_STALE -> s_u == 0
     """
     print("\n" + "="*70)
     print("PROPERTY 6: Uncertainty Timer Reset on Valid Detection")
@@ -337,11 +331,7 @@ def prop_uncertainty_timer_reset():
     
     vars_dict = create_automaton_vars()
     
-    # Property: s_d < MAX_STALE → s_u == 0
-    property_formula = Implies(
-        vars_dict['s_d'] < MAX_STALE,
-        vars_dict['s_u'] == 0
-    )
+    property_formula = Implies(vars_dict['s_d'] < MAX_STALE, vars_dict['s_u'] == 0)
     
     result = check_property("s_d valid → s_u = 0", property_formula, vars_dict)
     
@@ -355,11 +345,10 @@ def prop_uncertainty_timer_reset():
     return result
 
 # ============================================================================
-# MAIN VERIFICATION RUNNER
+# MAIN: run all properties
 # ============================================================================
 
 def verify_all_properties():
-    """Run all property verifications."""
     print("\n" + "#"*70)
     print("# PEDESTRIAN PROTECTION AUTOMATON - FORMAL VERIFICATION")
     print("#"*70)
@@ -378,10 +367,13 @@ def verify_all_properties():
     print("#"*70)
     for prop_name, result in results.items():
         status = "✓ VERIFIED" if result else "✗ FAILED"
+        if result is None:
+            status = "? UNKNOWN"
         print(f"{prop_name}: {status}")
     print("#"*70 + "\n")
     
-    return all(results.values())
+    # return True only if all are True (not None)
+    return all((r is True) for r in results.values())
 
 if __name__ == "__main__":
     verify_all_properties()

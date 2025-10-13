@@ -7,33 +7,38 @@ import time
 # GLOBAL THRESHOLDS
 # ============================================================================
 
-# Buffer size
-N = 10
+N = 10  # Buffer size
+RT_H = 700  # Reaction time (ms)
+CAMERA_FREQ = 100  # Camera frequency (ms)
+RT_WINDOW_FRAMES = RT_H / 100
+RT_HALF_FRAMES = max(1, int(RT_WINDOW_FRAMES / 2))  # Half reaction window (minimum 1)
 
-# Detection thresholds
-TH_C = 0.5  # Threshold for certain detection (confidence)
-TH_D_STALE = 200  # Threshold for detection stale data (ms)
-TH_C_STALE = 200  # Threshold for crossing stale data (ms)
-
-# Time-to-collision thresholds (seconds)
-TH_TTC_S = 5.0  # Safe TTC threshold
-TH_TTC_R = 3.0  # Risky TTC threshold
-TH_TTC_C = 1.5  # Critical TTC threshold
-MIN_VAL = 0.8
-
-# Staleness upper bound
-MAX_STALE = 1000  # Maximum staleness (ms)
-MAX_UNCERTAIN = 2000  # Handover timeout (ms)
-
+# Consensus thresholds (percentage of buffer that must agree)
 S_DISTANCE_CONSENSUS = 0.8
 SR_DISTANCE_CONSENSUS = 0.6
 RC_DISTANCE_CONSENSUS = 0.4
 C_DISTANCE_CONSENSUS = 0.2
-NO_TTC = 10000000
-CAMERA_FREQ = 100  # Camera frequency (ms)
-RT_H_VAL = 700 # Reaction time (ms)
-RT_WINDOW_FRAMES = int(RT_H_VAL / CAMERA_FREQ) 
-RT_HALF_FRAMES = RT_WINDOW_FRAMES / 2
+CONSENSUS = 0.8
+
+# ============================================================================
+# SAFETY THRESHOLDS (Z3 - can be verified parametrically)
+# ============================================================================
+
+TH_C = 0.4
+TH_D_STALE = 300
+TH_C_STALE = 300
+
+# Time-to-collision thresholds (seconds)
+TH_TTC_S = 4000 # Safe TTC threshold
+TH_TTC_R = 2000 # Risky TTC threshold
+TH_TTC_C = 1000 # Critical TTC threshold
+
+# Staleness upper bounds
+MAX_STALE = 1000 # Maximum staleness (ms)
+MAX_UNCERTAIN = 300 # Handover timeout (ms)
+
+# Sensor parameters
+NO_TTC = TH_TTC_S + 1
 
 
 # ============================================================================
@@ -117,16 +122,18 @@ class PedestrianProtectionAutomaton:
     
     def _detected(self) -> bool:
         """Check if pedestrian is detected based on confidence buffer"""
-        if len(self.B_C) == 0:
+        limit = int(min(N, RT_WINDOW_FRAMES))
+        if len(self.B_C) < limit:
             return False
-        count = sum(1 for c in self.B_C if c > TH_C)
+        count = sum(1 for i in range(limit) if self.B_C[i] >= TH_C)
         return count >= RT_HALF_FRAMES
     
     def _crossing(self) -> bool:
         """Check if pedestrian is crossing based on crossing buffer"""
-        if len(self.B_cross) == 0:
+        limit = int(min(N, RT_WINDOW_FRAMES))
+        if len(self.B_cross) < limit: 
             return False
-        count = sum(self.B_cross)
+        count = sum(self.B_cross[i] for i in range(limit))
         return count >= RT_HALF_FRAMES
     
     def _valid_d(self) -> bool:
@@ -142,31 +149,31 @@ class PedestrianProtectionAutomaton:
         if len(self.B_TTC) == 0:
             return True
         k = int(S_DISTANCE_CONSENSUS * N)
-        count = sum(1 for i in range(k) if self.B_TTC[i] >= TH_TTC_S)
-        return count >= MIN_VAL * k
+        count = sum(1 for i in range(k) if self.B_TTC[i] > TH_TTC_S)
+        return count >= k * CONSENSUS
     
     def _s_r_distance(self) -> bool:
         """Check if distance is safe-to-risky (Z3-matching implementation)"""
         if len(self.B_TTC) == 0:
             return False
         k = int(SR_DISTANCE_CONSENSUS * N)
-        count = sum(1 for i in range(k) if TH_TTC_R <= self.B_TTC[i] < TH_TTC_S)
-        return count >= MIN_VAL * k
+        count = sum(1 for i in range(k) if TH_TTC_R < self.B_TTC[i] <= TH_TTC_S)
+        return count >= CONSENSUS * k
     
     def _r_c_distance(self) -> bool:
         """Check if distance is risky-to-critical"""
         if len(self.B_TTC) == 0:
             return False
         k = int(RC_DISTANCE_CONSENSUS * N)
-        count = sum(1 for i in range(k) if TH_TTC_C <= self.B_TTC[i] < TH_TTC_R)
-        return count >= MIN_VAL * k
+        count = sum(1 for i in range(k) if TH_TTC_C < self.B_TTC[i] <= TH_TTC_R)
+        return count >= CONSENSUS * k
     
     def _c_distance(self) -> bool:
         """Check if distance is critical"""
         if len(self.B_TTC) == 0:
             return False
         limit = int(C_DISTANCE_CONSENSUS * N)
-        return all(self.B_TTC[i] < TH_TTC_C for i in range(limit))
+        return all(self.B_TTC[i] <= TH_TTC_C for i in range(limit))
     
     def _uncertain_distance(self) -> bool:
         """Check if distance classification is uncertain"""
