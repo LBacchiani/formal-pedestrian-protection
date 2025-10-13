@@ -21,22 +21,21 @@
 
 A \textbf{hybrid automaton} is formally defined as a tuple
 \[
-\mathcal{H} = (Q, X, U, \mathsf{Init}, f, \mathsf{Inv}, E, G, R)
+\mathcal{H} = (Q, X, \mathsf{Init}, f, \mathsf{Inv}, E, G, R)
 \]
 where
 \begin{itemize}
     \item $Q$ is a finite set of \textbf{discrete states} (modes or locations).
     \item $X \subseteq \mathbb{R}^n$ is the set of \textbf{continuous variables}.
-    \item $U \subseteq \mathbb{R}^m$ is the set of \textbf{control inputs} (external signals or commands).
     \item $\mathsf{Init} \subseteq Q \times X$ is the set of \textbf{initial states}.
-    \item $f: Q \times X \times U \to \mathbb{R}^n$ assigns a \textbf{vector field} for continuous evolution in each discrete state: 
+    \item $f: Q \times X \to \mathbb{R}^n$ assigns a \textbf{vector field} for continuous evolution in each discrete state: 
     \[
-    \dot{x} = f(q, x, u), \quad q \in Q, \; x \in X, \; u \in U
+    \dot{x} = f(q, x), \quad q \in Q, \; x \in X
     \]
     \item $\mathsf{Inv}: Q \to 2^X$ assigns an \textbf{invariant} to each discrete state, specifying the set of continuous states where the system can remain in $q$.
     \item $E \subseteq Q \times Q$ is the set of \textbf{edges} representing discrete transitions between states.
-    \item $G: E \to 2^{X \times U}$ assigns a \textbf{guard} to each edge, which is a condition on $(x, u)$ that must hold for the transition to occur.
-    \item $R: E \times X \times U \to 2^X$ assigns a \textbf{reset map} to each edge, specifying how the continuous state changes during a discrete transition.
+    \item $G: E \to 2^X$ assigns a \textbf{guard} to each edge, which is a condition on $x$ that must hold for the transition to occur.
+    \item $R: E \times X \to 2^X$ assigns a \textbf{reset map} to each edge, specifying how the continuous state changes during a discrete transition.
 \end{itemize}
 
 
@@ -57,15 +56,17 @@ each representing a different operational mode of the pedestrian protection syst
 \section{Continuous Variables}
 
 The automaton has the following continuous variables:
-\[X = \{C_0, \ldots, C_{n-1}, TTC_0, \ldots, TTC_{n-1}, cs_0, \ldots, cs_{n-1}, s_d, s_c, s_u\}\]
+\[X = \{C_0, \ldots, C_{n-1}, TTC_0, \ldots, TTC_{n-1}, cs_0, \ldots, cs_{n-1}, \mathsf{sns}, s_d, s_c, s_u, t\}\]
 where:
 \begin{itemize}
-    \item $C_i$ is the $i$-th confidence level. For brevity, we denote $C_0, \ldots, C_{n-1}$ as $B_C$.
-    \item $TTC_i$ is the $i$-th time-to-collision. For brevity, we denote $TTC_0, \ldots, TTC_{n-1}$ as $B_{TTC}$.
-    \item $cs_i$ is the $i$-th crossing state. For brevity, we denote $cs_0, \ldots, cs_{n-1}$ as $B_{cs}$.
+    \item $C_i \in [0,1]$ is the $i$-th confidence level. For brevity, we denote $C_0, \ldots, C_{n-1}$ as $B_C$;
+    \item $TTC_i \in \mathbb{R}_{>0}$ is the $i$-th time-to-collision. For brevity, we denote $TTC_0, \ldots, TTC_{n-1}$ as $B_{TTC}$;
+    \item $cs_i \in \{0,1\}$ is the $i$-th crossing state. For brevity, we denote $cs_0, \ldots, cs_{n-1}$ as $B_{cs}$;
+    \item $\mathsf{sns} \in \{0,1\} $ is a flag to denote whether sensor data has been received or not;
     \item $s_d$ is the staleness of the detection data;
     \item $s_c$ is the time since last pedestrian crossing detection;
     \item $s_u$ is the time since uncertain data.
+    \item $t$ is the time since last sensor value.
 \end{itemize}
 
 \section{Initial States}
@@ -75,15 +76,15 @@ where
 \[
 \begin{aligned}
     X_0 = &\{C_0 = 0, \ldots, C_{n-1} = 0, TTC_0 = \mathsf{NO\_TTC}, \ldots, TTC_{n-1} = \mathsf{NO\_TTC}, \\
-            &cs_0 = 0, \ldots, cs_{n-1} = 0, s_d = 0, s_c = 0, s_u = 0\},
+            &cs_0 = 0, \ldots, cs_{n-1} = 0, s_d = 0, s_c = 0, s_u = 0, t = 0, \mathsf{sns} = 0\},
 \end{aligned}
 \]
 where $\mathsf{NO\_TTC}$ is a large sentinel value indicating no pedestrian detected.
 
 
-\section{Thresholds, Parameters and Helper Functions}
+\section{Thresholds and Helper Functions}
 
-The automaton uses the following thresholds:
+\paragraph{Thresholds.} The automaton uses the following thresholds:
 \begin{itemize}
     \item $n$: number of frames;
     \item $\mathsf{TH\_C}$: threshold for detection confidence;
@@ -93,7 +94,7 @@ The automaton uses the following thresholds:
     \item $\mathsf{MAX\_UNCERTAIN}$: time upper bound for uncertain camera detection (ms);
     \item $\mathsf{TH\_TTC\_s}$: threshold for safe time-to-collision;
     \item $\mathsf{TH\_TTC\_r}$: threshold for risky time-to-collision;
-    \item $\mathsf{TH\_TTC\_c}$: threshold for critical time-to-c;
+    \item $\mathsf{TH\_TTC\_c}$: threshold for critical time-to-collision;
     \item $\mathsf{S\_DISTANCE\_CONSENSUS}$: percentage of agreeing frames for safe distance classification; 
     \item $\mathsf{SR\_DISTANCE\_CONSENSUS}$: percentage of agreeing frames for safe-risky distance classification;
     \item $\mathsf{RC\_DISTANCE\_CONSENSUS}$: percentage of agreeing frames for risky-critical distance classification;
@@ -101,14 +102,13 @@ The automaton uses the following thresholds:
     \item $\mathsf{CONSENSUS}: $ percentage of agreeing frames for classification.
 \end{itemize}
 
-The automaton applies the following assumptions:
+\paragraph{Assumptions.} The automaton applies the following assumptions:
 \begin{itemize}
     \item $\mathsf{CAMERA\_FREQ} = 100ms$;
-    \item $\mathsf{RT\_H} = 700ms$;
-    \item $U \subseteq \mathbb{R}^3$ is a triple (C, TTC, cs).
+    \item $\mathsf{RT\_H} = 700ms$.
 \end{itemize}
 
-We now define the following helper functions.
+\paragraph{Helper functions.} We now define the following helper functions.
 \begin{definition}[P helper function]
     The helper function $P$ is defined as follows.
 \[
@@ -120,33 +120,59 @@ We now define the following helper functions.
 \]
 \end{definition}
 
-\begin{definition}[Update function]
-The update function $\mathsf{upd}: X \times U \to X$ is defined as follows.
+
+\begin{definition}[Sense function]
+The sense function $\mathsf{sense}: X \to X$ is defined as follows.
     \[
     \begin{aligned}
-        &\mathsf{upd}(\{C_0, \ldots, C_{n-1}, TTC_0, \ldots, TTC_{n-1}, cs_0, \ldots, cs_{n-1}, s_d, s_c, s_u\}, (C, TTC, cs)) = \\
-        &\{C, C_1', \ldots, C_{n-1}', TTC, TTC_1', \ldots, TTC_{n-1}', cs, cs_1', \ldots, cs_{n-1}', s_d', s_c', s_u'\}
+        &\mathsf{sense}(\{C_0, \ldots, C_{n-1}, TTC_0, \ldots, TTC_{n-1}, cs_0, \ldots, cs_{n-1}, \mathsf{sns}, s_d, s_c, s_u, t\}) = \\
+        &\{C, C_1', \ldots, C_{n-1}', TTC, TTC_1', \ldots, TTC_{n-1}', cs, cs_1', \ldots, cs_{n-1}',  \mathsf{sns}', s_d, s_c, s_u, t'\}
     \end{aligned}
 \]
 where
 \[
     \begin{aligned}
-    C_i' &= C_{i-1}, \; i = 1, \dots, n-1 \\
-    TTC_i' &= TTC_{i-1}, \; i = 1, \dots, n-1 \\
-    cs_i' &= cs_{i-1}, \; i = 1, \dots, n-1 \\
+     \mathsf{sns}' &= 1, t' = 0, \, C_i' = C_{i-1}, \, TTC_i' = TTC_{i-1}, \, cs_i' = cs_{i-1} \text{ with } i = 1, \dots, n-1, \\ 
+    C &\in [0,1], \;
+    TTC =     
+    \begin{cases}
+        \mathsf{NO\_TTC} & \text{if } C < \mathsf{TH\_C} \\
+        v \in \mathbb{R}_{>0} & \text{otherwise}
+    \end{cases} \;
+    cs =     
+    \begin{cases}
+        0 & \text{if } C < \mathsf{TH\_C} \\
+        v \in \{0,1\} & \text{otherwise}
+    \end{cases} 
+    \end{aligned}
+\]
+\end{definition}
+
+
+
+\begin{definition}[Reset timers function]
+The reset timer function $\mathsf{reset}: X \to X$ is defined as follows.
+    \[
+    \begin{aligned}
+        &\mathsf{reset}(\{B_C, B_{TTC}, B_{cs}, \mathsf{sns}, s_d, s_c, s_u, t\}) = \{B_C, B_{TTC}, B_{cs},  \mathsf{sns}', s_d', s_c', s_u',t\}
+    \end{aligned}
+\]
+where $\mathsf{sns}' = 0$ and 
+\[
+    \begin{aligned}
     s_d' &=     
     \begin{cases}
-        0 & \text{if } \mathsf{detected}(\{\ldots, s_d, s_c, s_u\}, (C, TTC, cs)) \\
+        0 & \text{if } \mathsf{detected}(\{B_C, B_{TTC}, B_{cs}, s_d, s_c, s_u, t\}) \\
         s_d & \text{otherwise}
     \end{cases}\\
     s_c' &=     
     \begin{cases}
-        0 & \text{if } \mathsf{crossing}(\{\ldots, s_d, s_c, s_u\}, (C, TTC, cs)) \\
+        0 & \text{if } \mathsf{crossing}(\{B_C, B_{TTC}, B_{cs}, s_d, s_c, s_u, t\}) \\
         s_c & \text{otherwise}
     \end{cases}\\
     s_u' &=     
     \begin{cases}
-        0 & \text{if } \mathsf{uncertain}(\{\ldots, s_d, s_c, s_u\}, (C, TTC, cs)) \\
+        0 & \text{if } \mathsf{uncertain}(\{B_C, B_{TTC}, B_{cs}, s_d, s_c, s_u, t\}) \\
         s_u & \text{otherwise}
     \end{cases}\\
     \end{aligned}
@@ -154,11 +180,10 @@ where
 \end{definition}
 
 \begin{definition}[Detection]
-    The predicate $\mathsf{detected}$ as defined as follows. Recall $B_C = C_0 \ldots C_{n-1}$.
+    The predicate $\mathsf{detected}$ as defined as follows. Recall, $B_C = C_0 \ldots C_{n-1}$.
     \[
         \begin{aligned}
-                \mathsf{detected}(\{B_C, &B_{TTC}, B_{cs}, s_d, s_c, s_u\}, (C,TTC,cs)) = \\
-                &P(C \geq \mathsf{TH\_C}) + \sum_{i=0}^{n-2} P(C_i \geq \mathsf{TH\_C}) \geq \lceil \frac{\mathsf{RT\_H}}{ 2 \cdot \mathsf{CAMERA\_FREQ}} \rceil
+                \mathsf{detected}(\{B_C, B_{TTC}, B_{cs}, \mathsf{sns}, s_d, s_c, s_u, t\}) = \sum_{i=0}^{n-1} P(C_i \geq \mathsf{TH\_C}) \geq \lceil \frac{\mathsf{RT\_H}}{ 2 \cdot \mathsf{CAMERA\_FREQ}} \rceil
         \end{aligned}
     \]
 \end{definition}
@@ -167,17 +192,16 @@ where
     The predicate $\mathsf{valid\_d}$ as defined as follows.
     \[
         \begin{aligned}
-                \mathsf{valid\_d}(x,u) = \mathsf{detected}(x,u) \lor s_d < \mathsf{TH\_D\_stale}
+                \mathsf{valid\_d}(x) = \mathsf{detected}(x) \lor s_d < \mathsf{TH\_D\_stale}
         \end{aligned}
     \]
 \end{definition}
 
 \begin{definition}[Safe distance]
-The predicate $\mathsf{s\_distance}$ is defined as follows. Recall $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
+The predicate $\mathsf{s\_distance}$ is defined as follows. Recall, $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
 \[
     \begin{aligned}
-            \mathsf{s\_distance}&(\{B_C, B_{TTC}, B_{cs}, s_d, s_c, s_u\}, (C,TTC,cs)) = \\
-            &P(TTC > \mathsf{TH\_TTC\_s}) + \sum_{i=0}^{k-1} P(TTC_i > \mathsf{TH\_TTC\_s}) \geq \lceil k \cdot \mathsf{ CONSENSUS}\rceil
+            \mathsf{s\_distance}&(\{B_C, B_{TTC}, B_{cs}, \mathsf{sns}, s_d, s_c, s_u, t\}) = \sum_{i=0}^{k} P(TTC_i > \mathsf{TH\_TTC\_s}) \geq \lceil k \cdot \mathsf{ CONSENSUS}\rceil
     \end{aligned}
 \]
 where $k = \lceil n \cdot \mathsf{S\_DISTANCE\_CONSENSUS} \rceil$.
@@ -185,12 +209,11 @@ where $k = \lceil n \cdot \mathsf{S\_DISTANCE\_CONSENSUS} \rceil$.
 \end{definition}
 
 \begin{definition}[Safe-Risky distance]
-The predicate $\mathsf{s\_r\_distance}$ is defined as follows. Recall $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
+The predicate $\mathsf{s\_r\_distance}$ is defined as follows. Recall, $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
 \[
     \begin{aligned}
-        \mathsf{s\_r\_distance}&(\{B_C, B_{TTC}, B_{cs}, s_d, s_c, s_u\}, (C,TTC,cs)) = \\
-        &P(\mathsf{TH\_TTC\_r} < TTC <= \mathsf{TH\_TTC\_s}) + \\
-        &\sum_{i=0}^{k-1} P(\mathsf{TH\_TTC\_r} < TTC_i <= \mathsf{TH\_TTC\_s}) \geq \lceil k \cdot \mathsf{CONSENSUS}\rceil
+        \mathsf{s\_r\_distance}&(\{B_C, B_{TTC}, B_{cs}, \mathsf{sns}, s_d, s_c, s_u, t\}) = \\
+        &\sum_{i=0}^{k} P(\mathsf{TH\_TTC\_r} < TTC_i <= \mathsf{TH\_TTC\_s}) \geq \lceil k \cdot \mathsf{CONSENSUS}\rceil
     \end{aligned}
 \]
 where $k = \lceil n \cdot \mathsf{SR\_DISTANCE\_CONSENSUS} \rceil$.
@@ -198,34 +221,31 @@ where $k = \lceil n \cdot \mathsf{SR\_DISTANCE\_CONSENSUS} \rceil$.
 \end{definition}
 
 \begin{definition}[Risky-Critical distance]
-The predicate $\mathsf{r\_c\_distance}$ is defined as follows. Recall $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
+The predicate $\mathsf{r\_c\_distance}$ is defined as follows. Recall, $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
 \[
     \begin{aligned}
-        \mathsf{r\_c\_distance}&(\{B_C, B_{TTC}, B_{cs}, s_d, s_c, s_u\}, (C,TTC,cs)) = \\ 
-        &P(\mathsf{TH\_TTC\_c} < TTC <= \mathsf{TH\_TTC\_r}) + \\
-        &\sum_{i=0}^{k-1} P(\mathsf{TH\_TTC\_c} < TTC_i <= \mathsf{TH\_TTC\_r}) \geq \lceil k \cdot \mathsf{CONSENSUS}\rceil
+        \mathsf{r\_c\_distance}&(\{B_C, B_{TTC}, B_{cs}, \mathsf{sns}, s_d, s_c, s_u, t\}) = \\ 
+        &\sum_{i=0}^{k} P(\mathsf{TH\_TTC\_c} < TTC_i <= \mathsf{TH\_TTC\_r}) \geq \lceil k \cdot \mathsf{CONSENSUS}\rceil
     \end{aligned}
 \]
 where $k = \lceil n \cdot \mathsf{RC\_DISTANCE\_CONSENSUS} \rceil$.    
 \end{definition}
 
 \begin{definition}[Critical distance]
-The predicate $\mathsf{c\_distance}$ is defined as follows. Recall $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
+The predicate $\mathsf{c\_distance}$ is defined as follows. Recall, $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
 \[
     \begin{aligned}
-        \mathsf{c\_distance}&(\{B_C, B_{TTC}, B_{cs}, s_d, s_c, s_u\}, (C,TTC,cs)) = \\
-        &P(TTC >= \mathsf{TH\_TTC\_c}) + \sum_{i=0}^{k-1} P(TTC_i >= \mathsf{TH\_TTC\_c}) \geq \lceil k \cdot \mathsf{CONSENSUS}\rceil
+        \mathsf{c\_distance}&(\{B_C, B_{TTC}, B_{cs}, \mathsf{sns}, s_d, s_c, s_u, t\}) = \sum_{i=0}^{k} P(TTC_i \ge \mathsf{TH\_TTC\_c}) \geq \lceil k \cdot \mathsf{CONSENSUS}\rceil
     \end{aligned}
 \]
 where $k = \lceil n \cdot \mathsf{C\_DISTANCE\_CONSENSUS} \rceil$.    
 \end{definition}
 
 \begin{definition}[Crossing]
-    The predicate $\mathsf{crossing}$ as defined as follows. Recall $B_{cs} = cs_0 \ldots cs_{n-1}$.
+    The predicate $\mathsf{crossing}$ as defined as follows. Recall, $B_{cs} = cs_0 \ldots cs_{n-1}$.
     \[
         \begin{aligned}
-            \mathsf{crossing}(\{B_C, &B_{TTC}, B_{cs}, s_d, s_c, s_u\}, (C,TTC,cs)) = \\ 
-            &P(cs = 1) + \sum_{i=0}^{n-2} P(cs_i = 1) \geq \lceil \frac{\mathsf{RT\_H}}{ 2 \cdot \mathsf{CAMERA\_FREQ}} \rceil
+            \mathsf{crossing}(\{B_C, B_{TTC}, B_{cs}, \mathsf{sns}, s_d, s_c, s_u, t\}) = \sum_{i=0}^{n-1} P(cs_i = 1) \geq \lceil \frac{\mathsf{RT\_H}}{ 2 \cdot \mathsf{CAMERA\_FREQ}} \rceil
         \end{aligned}
     \]
 \end{definition}
@@ -233,26 +253,26 @@ where $k = \lceil n \cdot \mathsf{C\_DISTANCE\_CONSENSUS} \rceil$.
 \begin{definition}[Valid crossing]
     The predicate $\mathsf{valid\_c}$ as defined as follows.
     \[
-        \mathsf{valid\_c}(x, u) = \mathsf{crossing}(x, u) \lor s_c < \mathsf{TH\_C\_stale}
+        \mathsf{valid\_c}(x) = \mathsf{crossing}(x) \lor s_c < \mathsf{TH\_C\_stale}
     \]
 \end{definition}
 
 \begin{definition}[Uncertain data]
     The predicate $\mathsf{uncertain}$ as defined as follows.
     \[
-        \mathsf{uncertain}(x,u) = \neg \mathsf{s\_distance}(x,u) \lor \neg \mathsf{s\_r\_distance}(x,u) \lor \neg \mathsf{r\_c\_distance}(x,u) \lor \neg \mathsf{c\_distance}(x,u)
+        \mathsf{uncertain}(x) = \neg \mathsf{s\_distance}(x) \lor \neg \mathsf{s\_r\_distance}(x) \lor \neg \mathsf{r\_c\_distance}(x) \lor \neg \mathsf{c\_distance}(x)
     \]
 \end{definition}
 
 
 \section{Vector Field}
-The vector field $f$ defines the continuous evolution of the variables in each discrete state, possibly affected by input $u \in U$:
+The vector field $f$ defines the continuous evolution of the variables in each discrete state: 
 \[
-\dot{C}_i = 0, \quad \dot{TTC}_i = 0, \quad \dot{cs}_i = 0, \quad \forall i \in [0,n-1]
+\dot{\mathsf{sns}} = 0, \quad \dot{C}_i = 0, \quad \dot{TTC}_i = 0, \quad \dot{cs}_i = 0, \quad \forall i \in [0,n-1], 
 \]
 
 \[
-\dot{s}_d = 1000, \quad \dot{s}_c = 1000, \quad \dot{s}_u = 1000
+\dot{s}_d = 1000, \quad \dot{s}_c = 1000, \quad \dot{s}_u = 1000, \quad \dot{t} = 1000
 \]
 
 Equivalently, the vector field can be written as:
@@ -262,15 +282,16 @@ X =
     C_0 \\ \vdots \\ C_{n-1} \\ 
     TTC_0 \\ \vdots \\ TTC_{n-1} \\ 
     cs_0 \\ \vdots \\ cs_{n-1} \\ 
-    s_d \\ s_c \\ s_u
+    \mathsf{sns} \\
+    s_d \\ s_c \\ s_u \\ t
 \end{bmatrix}, \quad
-f(q, X, u) =
+f(q, X) =
 \begin{bmatrix}
     0 \\ \vdots \\ 0 \\ 
     0 \\ \vdots \\ 0 \\ 
-    0 \\ \vdots \\ 0 \\ 
-    1000 \\ 1000 \\ 1000
-\end{bmatrix}, \quad \forall q \in Q, \; u \in U
+    0 \\ \vdots \\ 0 \\ 0 \\
+    1000 \\ 1000 \\ 1000 \\ 1000
+\end{bmatrix}, \quad \forall q \in Q
 \]
 
 \section{Invariants}
@@ -279,127 +300,27 @@ The invariants $\mathsf{Inv}: Q \to 2^X$ specify conditions under which the auto
 
 \[
 \begin{aligned}
-&\mathsf{Inv}(\mathsf{Normal}) = \{ x \in X \mid \neg \mathsf{valid\_d\_x}(x) \lor \mathsf{s\_distance\_x}(x) \lor \mathsf{uncertain\_x}(x) \} \\
-&\mathsf{Inv}(\mathsf{SafeWarning}) = \{ x \in X \mid (\mathsf{valid\_d\_x}(x) \land \neg \mathsf{valid\_c\_x}(x) \land \mathsf{s\_r\_distance\_x}(x))  \\ 
-&\qquad\qquad(\mathsf{uncertain\_x}(x) \land s_u < \mathsf{MAX\_UNCERTAIN})\} \\
-&\mathsf{Inv}(\mathsf{Throttling}) = \{ x \in X \mid \mathsf{valid\_d\_x}(x) \land \big( (\neg \mathsf{valid\_c\_x}(x) \land \mathsf{r\_c\_distance\_x}(x)) \lor \\ 
-&\qquad\qquad(\mathsf{valid\_c\_x}(x) \land \mathsf{s\_r\_distance\_x}(x)) \lor (\mathsf{uncertain\_x}(x) \land s_u < \mathsf{MAX\_UNCERTAIN})\big) \} \\
-&\mathsf{Inv}(\mathsf{CriticalSlowdown}) = \{ x \in X \mid (\mathsf{valid\_d\_x}(x) \land \neg \mathsf{valid\_c\_x}(x) \land \mathsf{c\_distance\_x}(x)) \lor \\
-&\qquad\qquad(\mathsf{valid\_d\_x}(x) \land \mathsf{uncertain\_x}(x) \land s_u < \mathsf{MAX\_UNCERTAIN})\} \\
-&\mathsf{Inv}(\mathsf{SoftBraking}) = \{ x \in X \mid (\mathsf{valid\_d\_x}(x) \land \mathsf{valid\_c\_x}(x) \land \mathsf{r\_c\_distance\_x}(x)) \lor \\ 
-&\qquad\qquad (\mathsf{valid\_d\_x}(x) \land \mathsf{valid\_c\_x}(x) \land \mathsf{uncertain\_x}(x) \land s_u < \mathsf{MAX\_UNCERTAIN})\}\\
-&\mathsf{Inv}(\mathsf{EmergencyBraking}) = \{ x \in X \mid \mathsf{valid\_c\_x}(x) \}
+&\mathsf{Inv}(\mathsf{Normal}) = \{ x \in X \mid \neg \mathsf{valid\_d}(x) \lor \mathsf{s\_distance}(x) \lor \mathsf{uncertain}(x) \} \\
+&\mathsf{Inv}(\mathsf{SafeWarning}) = \{ x \in X \mid (\mathsf{valid\_d}(x) \land \neg \mathsf{valid\_c}(x) \land \mathsf{s\_r\_distance}(x)) \lor  \\ 
+&\qquad\qquad(\mathsf{uncertain}(x) \land s_u < \mathsf{MAX\_UNCERTAIN})\} \\
+&\mathsf{Inv}(\mathsf{Throttling}) = \{ x \in X \mid \mathsf{valid\_d}(x) \land \big( (\neg \mathsf{valid\_c}(x) \land \mathsf{r\_c\_distance}(x)) \lor \\ 
+&\qquad\qquad(\mathsf{valid\_c}(x) \land \mathsf{s\_r\_distance}(x)) \lor (\mathsf{uncertain}(x) \land s_u < \mathsf{MAX\_UNCERTAIN})\big) \} \\
+&\mathsf{Inv}(\mathsf{CriticalSlowdown}) = \{ x \in X \mid (\mathsf{valid\_d}(x) \land \neg \mathsf{valid\_c}(x) \land \mathsf{c\_distance}(x)) \lor \\
+&\qquad\qquad(\mathsf{valid\_d}(x) \land \mathsf{uncertain}(x) \land s_u < \mathsf{MAX\_UNCERTAIN})\} \\
+&\mathsf{Inv}(\mathsf{SoftBraking}) = \{ x \in X \mid (\mathsf{valid\_d}(x) \land \mathsf{valid\_c}(x) \land \mathsf{r\_c\_distance}(x)) \lor \\ 
+&\qquad\qquad (\mathsf{valid\_d}(x) \land \mathsf{valid\_c}(x) \land \mathsf{uncertain}(x) \land s_u < \mathsf{MAX\_UNCERTAIN})\}\\
+&\mathsf{Inv}(\mathsf{EmergencyBraking}) = \{ x \in X \mid \mathsf{valid\_c}(x) \}
 \end{aligned}
 \]
 
 where we have the following functions.
-
-\begin{definition}[Detection (state-only)]
-    The predicate $\mathsf{detected\_x}$ is defined as follows. Recall $B_C = C_0 \ldots C_{n-1}$.
-    \[
-        \begin{aligned}
-            \mathsf{detected\_x}(\{B_C, &B_{TTC}, B_{cs}, s_d, s_c, s_u\}) = \\
-            &\sum_{i=0}^{n-1} P(C_i \geq \mathsf{TH\_C}) \geq 
-            \left\lceil \frac{\mathsf{RT\_H}}{ 2 \cdot \mathsf{CAMERA\_FREQ}} \right\rceil
-        \end{aligned}
-    \]
-\end{definition}
-
-\begin{definition}[Valid detection (state-only)]
-    The predicate $\mathsf{valid\_d\_x}$ is defined as follows.
-    \[
-        \mathsf{valid\_d\_x}(x) = \mathsf{detected\_x}(x) \lor s_d < \mathsf{TH\_D\_stale}
-    \]
-\end{definition}
-
-\begin{definition}[Safe distance (state-only)]
-The predicate $\mathsf{s\_distance\_x}$ is defined as follows. Recall $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
-\[
-    \begin{aligned}
-            \mathsf{s\_distance\_x}&(\{B_C, B_{TTC}, B_{cs}, s_d, s_c, s_u\}) = \\
-            &\sum_{i=0}^{k} P(TTC_i > \mathsf{TH\_TTC\_s}) \geq 
-            \left\lceil k \cdot \mathsf{ CONSENSUS}\right\rceil
-    \end{aligned}
-\]
-where $k = \lceil n \cdot \mathsf{S\_DISTANCE\_CONSENSUS} \rceil$.
-\end{definition}
-
-\begin{definition}[Safe-Risky distance (state-only)]
-The predicate $\mathsf{s\_r\_distance\_x}$ is defined as follows. Recall $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
-\[
-    \begin{aligned}
-        \mathsf{s\_r\_distance\_x}&(\{B_C, B_{TTC}, B_{cs}, s_d, s_c, s_u\}) = \\
-        &\sum_{i=0}^{k} P(\mathsf{TH\_TTC\_r} < TTC_i \leq \mathsf{TH\_TTC\_s}) \geq 
-        \left\lceil k \cdot \mathsf{CONSENSUS}\right\rceil
-    \end{aligned}
-\]
-where $k = \lceil n \cdot \mathsf{SR\_DISTANCE\_CONSENSUS} \rceil$.
-\end{definition}
-
-\begin{definition}[Risky-Critical distance (state-only)]
-The predicate $\mathsf{r\_c\_distance\_x}$ is defined as follows. Recall $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
-\[
-    \begin{aligned}
-        \mathsf{r\_c\_distance\_x}&(\{B_C, B_{TTC}, B_{cs}, s_d, s_c, s_u\}) = \\ 
-        &\sum_{i=0}^{k} P(\mathsf{TH\_TTC\_c} < TTC_i \leq \mathsf{TH\_TTC\_r}) \geq 
-        \left\lceil k \cdot \mathsf{CONSENSUS}\right\rceil
-    \end{aligned}
-\]
-where $k = \lceil n \cdot \mathsf{RC\_DISTANCE\_CONSENSUS} \rceil$.    
-\end{definition}
-
-\begin{definition}[Critical distance (state-only)]
-The predicate $\mathsf{c\_distance\_x}$ is defined as follows. Recall $B_{TTC} = TTC_0 \ldots TTC_{n-1}$.
-\[
-    \begin{aligned}
-        \mathsf{c\_distance\_x}&(\{B_C, B_{TTC}, B_{cs}, s_d, s_c, s_u\}) = \\
-        &\sum_{i=0}^{k} P(TTC_i \geq \mathsf{TH\_TTC\_c}) \geq 
-        \left\lceil k \cdot \mathsf{CONSENSUS}\right\rceil
-    \end{aligned}
-\]
-where $k = \lceil n \cdot \mathsf{C\_DISTANCE\_CONSENSUS} \rceil$.    
-\end{definition}
-
-\begin{definition}[Crossing (state-only)]
-    The predicate $\mathsf{crossing\_x}$ is defined as follows. Recall $B_{cs} = cs_0 \ldots cs_{n-1}$.
-    \[
-        \begin{aligned}
-            \mathsf{crossing\_x}(\{B_C, &B_{TTC}, B_{cs}, s_d, s_c, s_u\}) = \\ 
-            &\sum_{i=0}^{n-1} P(cs_i = 1) \geq 
-            \left\lceil \frac{\mathsf{RT\_H}}{ 2 \cdot \mathsf{CAMERA\_FREQ}} \right\rceil
-        \end{aligned}
-    \]
-\end{definition}
-
-\begin{definition}[Valid crossing (state-only)]
-    The predicate $\mathsf{valid\_c\_x}$ is defined as follows.
-    \[
-        \mathsf{valid\_c\_x}(x) = \mathsf{crossing\_x}(x) \lor s_c < \mathsf{TH\_C\_stale}
-    \]
-\end{definition}
-
-\begin{definition}[Uncertain data (state-only)]
-    The predicate $\mathsf{uncertain\_x}$ is defined as follows.
-    \[
-        \mathsf{uncertain\_x}(x) = 
-        \neg \mathsf{s\_distance\_x}(x) \lor 
-        \neg \mathsf{s\_r\_distance\_x}(x) \lor 
-        \neg \mathsf{r\_c\_distance\_x}(x) \lor 
-        \neg \mathsf{c\_distance\_x}(x)
-    \]
-\end{definition}
-
 
 
 \section{Edges, Guards, and Resets}
 
 \subsection{Edges}
 
-The set of edges $E \subseteq Q \times Q$ is defined as
-\[
-E = \{ e_1, e_2, \dots, e_{30} \},
-\]
-where
+The set of edges $E \subseteq Q \times Q$ is defined as $E = \{ e_1, e_2, \dots, e_{30} \}$, where
 \[
 \begin{aligned}
 e_1 &= (\mathsf{Normal}, \mathsf{Normal}) \\
@@ -419,7 +340,11 @@ e_{14} &= (\mathsf{Throttling}, \mathsf{SafeWarning}) \\
 e_{15} &= (\mathsf{Throttling}, \mathsf{Throttling}) \\
 e_{16} &= (\mathsf{Throttling}, \mathsf{CriticalSlowdown}) \\
 e_{17} &= (\mathsf{Throttling}, \mathsf{SoftBraking}) \\
-e_{18} &= (\mathsf{Throttling}, \mathsf{EmergencyBraking}) \\
+e_{18} &= (\mathsf{Throttling}, \mathsf{EmergencyBraking}) 
+\end{aligned}
+\]
+\[
+\begin{aligned}
 e_{19} &= (\mathsf{CriticalSlowdown}, \mathsf{Normal}) \\
 e_{20} &= (\mathsf{CriticalSlowdown}, \mathsf{SafeWarning}) \\
 e_{21} &= (\mathsf{CriticalSlowdown}, \mathsf{Throttling}) \\
@@ -437,7 +362,7 @@ e_{30} &= (\mathsf{EmergencyBraking}, \mathsf{EmergencyBraking})
 
 \subsection{Guards}
 
-The guard conditions $G: E \to 2^{X \times U}$ for each edge are defined as follows.
+The guard conditions $G: E \to 2^{X}$ for each edge are defined as follows.
 
 \[
 G = \{ g_1, g_2, \dots, g_{30} \},
@@ -445,46 +370,61 @@ G = \{ g_1, g_2, \dots, g_{30} \},
 where
 \[
 \begin{aligned}
-G(e_1)  &= \{(x,u) \in X \times U \mid \neg \mathsf{valid\_d}(x,u) \lor \mathsf{s\_distance}(x,u) \lor \mathsf{uncertain}(x,u)\} \\
-G(e_2)  &= \{(x,u) \in X \times U \mid \mathsf{valid\_d}(x,u) \land \neg \mathsf{valid\_c}(x,u) \land \mathsf{s\_r\_distance}(x,u)\} \\
-G(e_3)  &= \{(x,u) \in X \times U \mid \mathsf{valid\_d}(x,u) \land ((\neg \mathsf{valid\_c}(x,u) \land \mathsf{r\_c\_distance}(x,u)) \lor \\ 
-&\qquad\qquad(\mathsf{valid\_c}(x,u) \land \mathsf{s\_r\_distance}(x,u)))\} \\
-G(e_4)  &= \{(x,u) \in X \times U \mid \mathsf{valid\_d}(x,u) \land \neg \mathsf{valid\_c}(x,u) \land \mathsf{c\_distance}(x,u)\} \\
-G(e_5)  &= \{(x,u) \in X \times U \mid \mathsf{valid\_d}(x,u) \land \mathsf{valid\_c}(x,u) \land \mathsf{r\_c\_distance}(x,u)\} \\
-G(e_6)  &= \{(x,u) \in X \times U \mid \mathsf{valid\_d}(x,u) \land \mathsf{valid\_c}(x,u) \land \mathsf{c\_distance}(x,u)\} \\
-G(e_7)  &= \{(x,u) \in X \times U \mid \neg \mathsf{valid\_d}(x,u) \lor \mathsf{s\_distance}(x,u) \lor s_u \ge \mathsf{MAX\_UNCERTAIN}\} \\
-G(e_8)  &= \{(x,u) \in X \times U \mid (\mathsf{valid\_d}(x,u) \land \neg \mathsf{valid\_c}(x,u) \land \mathsf{s\_r\_distance}(x,u))  \\ 
-&\qquad\qquad(\mathsf{uncertain}(x,u) \land s_u < \mathsf{MAX\_UNCERTAIN})\} \\
+G(e_1)  &= \{x \in X \mid \big((\neg \mathsf{valid\_d}(x) \lor \mathsf{s\_distance}(x) \lor \mathsf{uncertain}(x)) \land \mathsf{sns} = 1 \land t = 0\big) \lor \\
+&\qquad\qquad(\mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ})\} \\
+G(e_2)  &= \{x \in X \mid \mathsf{valid\_d}(x) \land \neg \mathsf{valid\_c}(x) \land \mathsf{s\_r\_distance(x) \land \mathsf{sns} = 1 \land t = 0}\} \\
+G(e_3)  &= \{x \in X \mid \mathsf{valid\_d}(x) \land \big((\neg \mathsf{valid\_c}(x) \land \mathsf{r\_c\_distance}(x)) \lor \\ 
+&\qquad\qquad(\mathsf{valid\_c}(x) \land \mathsf{s\_r\_distance}(x))\big) \land \mathsf{sns} = 1 \land t = 0 \} \\
+G(e_4)  &= \{x \in X \mid \mathsf{valid\_d}(x) \land \neg \mathsf{valid\_c}(x) \land \mathsf{c\_distance}(x) \land \mathsf{sns} = 1 \land t = 0 \} \\
+G(e_5)  &= \{x \in X \mid \mathsf{valid\_d}(x) \land \mathsf{valid\_c}(x) \land \mathsf{r\_c\_distance}(x) \land \mathsf{sns} = 1 \land t = 0\} \\
+G(e_6)  &= \{x \in X \mid \mathsf{valid\_d}(x) \land \mathsf{valid\_c}(x) \land \mathsf{c\_distance}(x) \land \mathsf{sns} = 1 \land t = 0\} \\
+G(e_7)  &= \{x \in X \mid (\neg \mathsf{valid\_d}(x) \lor \mathsf{s\_distance}(x) \lor s_u \ge \mathsf{MAX\_UNCERTAIN}) \land \mathsf{sns} = 1 \land t = 0 \} \\
+G(e_8)  &= \{x \in X \mid \big(((\mathsf{valid\_d}(x) \land \neg \mathsf{valid\_c}(x) \land \mathsf{s\_r\_distance}(x)) \lor  \\ 
+&\qquad\qquad(\mathsf{uncertain}(x) \land s_u < \mathsf{MAX\_UNCERTAIN})) \land \mathsf{sns} = 1 \land t = 0 \big) \lor \\ 
+&\qquad\qquad(\mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ}) \} \\
 G(e_9) &= G(e_3) \\ 
 G(e_{10}) &= G(e_4) \\
 G(e_{11}) &= G(e_5) \\ 
 G(e_{12}) &= G(e_6) \\
 G(e_{13}) &= G(e_7) \\ 
 G(e_{14}) &= G(e_2) \\ 
-G(e_{15}) &= \{(x,u) \in X \times U \mid \mathsf{valid\_d}(x,u) \land \big( (\neg \mathsf{valid\_c}(x,u) \land \mathsf{r\_c\_distance}(x,u)) \lor \\ 
-&\qquad\qquad(\mathsf{valid\_c}(x,u) \land \mathsf{s\_r\_distance}(x,u)) \lor (\mathsf{uncertain}(x,u) \land s_u < \mathsf{MAX\_UNCERTAIN})\big) \}\\
+G(e_{15}) &= \{x \in X \mid \big(\mathsf{valid\_d}(x) \land ((\neg \mathsf{valid\_c}(x) \land \mathsf{r\_c\_distance}(x)) \lor (\mathsf{valid\_c}(x) \land \mathsf{s\_r\_distance}(x)) \lor \\
+&\qquad\qquad (\mathsf{uncertain}(x) \land s_u < \mathsf{MAX\_UNCERTAIN})) \land \mathsf{sns} = 1 \land t = 0 \big) \lor \\
+&\qquad\qquad(\mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ}) \} \\
 G(e_{16}) &= G(e_4) \\
 G(e_{17}) &= G(e_5) \\
 G(e_{18}) &= G(e_6) \\
-G(e_{19}) &= \{(x,u) \in X \times U \mid \neg \mathsf{valid\_d}(x,u) \lor \mathsf{s\_distance}(x,u) \lor s_u \ge \mathsf{MAX\_UNCERTAIN} \}\\
+G(e_{19}) &= \{x \in X \mid (\neg \mathsf{valid\_d}(x) \lor \mathsf{s\_distance}(x) \lor s_u \ge \mathsf{MAX\_UNCERTAIN}) \land \mathsf{sns} = 1 \land t = 0 \}\\
 G(e_{20}) &= G(e_2)\\
 G(e_{21}) &= G(e_3) \\
-G(e_{22}) &= \{(x,u) \in X \times U \mid (\mathsf{valid\_d}(x,u) \land \neg \mathsf{valid\_c}(x,u) \land \mathsf{c\_distance}(x,u)) \lor \\
-&\qquad\qquad(\mathsf{valid\_d}(x,u) \land \mathsf{uncertain}(x,u) \land s_u < \mathsf{MAX\_UNCERTAIN})\} \\
+G(e_{22}) &= \{x \in X \mid \big((\mathsf{valid\_d}(x) \land \neg \mathsf{valid\_c}(x) \land \mathsf{c\_distance}(x)) \lor \\
+&\qquad\qquad(\mathsf{valid\_d}(x) \land \mathsf{uncertain}(x) \land s_u < \mathsf{MAX\_UNCERTAIN}) \land \mathsf{sns} = 1 \land t = 0 \big) \lor \\
+&\qquad\qquad(\mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ}) \} \\
 G(e_{23}) &= G(e_5) \\
 G(e_{24}) &= G(e_6) \\
-G(e_{25}) &= \{(x,u) \in X \times U \mid \neg \mathsf{valid\_d}(x,u) \lor \neg \mathsf{valid\_c}(x,u) \lor s_u \ge \mathsf{MAX\_UNCERTAIN} \}\\
-G(e_{26}) &= \{(x,u) \in X \times U \mid \neg \mathsf{valid\_d}(x,u) \lor \neg \mathsf{valid\_c}(x,u) \lor s_u \ge \mathsf{MAX\_UNCERTAIN} \}\\
-G(e_{27}) &= \{(x,u) \in X \times U \mid (\mathsf{valid\_d}(x,u) \land \mathsf{valid\_c}(x,u) \land \mathsf{r\_c\_distance}(x,u)) \lor \\ 
-&\qquad\qquad (\mathsf{valid\_d}(x,u) \land \mathsf{valid\_c}(x,u) \land \mathsf{uncertain}(x,u) \land s_u < \mathsf{MAX\_UNCERTAIN})\}\\
+G(e_{25}) &= \{x \in X \mid (\neg \mathsf{valid\_d}(x) \lor \neg \mathsf{valid\_c}(x) \lor s_u \ge \mathsf{MAX\_UNCERTAIN}) \land \mathsf{sns} = 1 \land t = 0 \}\\
+G(e_{26}) &= \{x \in X \mid (\neg \mathsf{valid\_d}(x) \lor \neg \mathsf{valid\_c}(x) \lor s_u \ge \mathsf{MAX\_UNCERTAIN}) \land \mathsf{sns} = 1 \land t = 0 \}\\
+G(e_{27}) &= \{x \in X \mid \big(\mathsf{valid\_d}(x) \land \mathsf{valid\_c}(x) \land (\mathsf{r\_c\_distance}(x) \lor (\mathsf{uncertain}(x) \land \\ 
+&\qquad\qquad s_u < \mathsf{MAX\_UNCERTAIN}))  \land \mathsf{sns} = 1 \land t = 0 \big) \lor (\mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ}) \} \\
 G(e_{28}) &= G(e_6) \\
-G(e_{29}) &= \{ (x,u) \in X \times U \mid \neg \mathsf{valid\_d}(x,u) \lor \neg \mathsf{valid\_c}(x,u) \} \\
-G(e_{30}) &= \{ (x,u) \in X \times U \mid \neg \mathsf{valid\_c}(x,u) \} \\
+G(e_{29}) &= \{ x \in X \mid (\neg \mathsf{valid\_d}(x) \lor \neg \mathsf{valid\_c}(x)) \land \mathsf{sns} = 1 \land t = 0 \} \\
+G(e_{30}) &= \{ x \in X \mid \mathsf{valid\_c}(x) \lor (\mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ}) \} \\
 \end{aligned}
 \]
 
 \subsection{Resets}
 
-Resets $ R(e,x,u) = \{x' \in X \mid x' = \mathsf{upd}(e,x,u) \}, \forall e \in E$.
+Resets $ R(e,x) = \{x' \in X \mid x' = \mathsf{h}(x) \}, \forall e \in E$, where 
+
+\[
+    h(x) = 
+    \begin{cases}
+        \mathsf{sense}(x) & \text{if } t,\mathsf{sns} \in x \land \mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ} \\
+        \mathsf{reset}(x) & \text{otherwise}
+    \end{cases}
+\]
+
+
+
 
 \end{document}
