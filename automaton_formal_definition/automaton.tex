@@ -122,7 +122,7 @@ where $\mathsf{NO\_TTC}$ is a large sentinel value indicating no pedestrian dete
 
 
 \begin{definition}[Sense function]
-The sense function $\mathsf{sense}: X \to X$ is defined as follows.
+The sense function $\mathsf{sense}: X \to 2^X$ is defined as follows.
     \[
     \begin{aligned}
         &\mathsf{sense}(\{C_0, \ldots, C_{n-1}, TTC_0, \ldots, TTC_{n-1}, cs_0, \ldots, cs_{n-1}, \mathsf{sns}, s_d, s_c, s_u, t\}) = \\
@@ -419,13 +419,13 @@ G(e_{30}) &= \{ x \in X \mid (\mathsf{valid\_c}(x) \land \mathsf{sns} = 1 \land 
 
 \subsection{Resets}
 
-Resets $ R(e,x) = \{x' \in X \mid x' = \mathsf{h}(x) \}, \forall e \in E$, where 
+Resets $ R(e,x) = h(x), \forall e \in E$, where 
 
 \[
     h(x) = 
     \begin{cases}
         \mathsf{sense}(x) & \text{if } t,\mathsf{sns} \in x \land \mathsf{sns} = 0 \land t \ge \mathsf{CAMERA\_FREQ} \\
-        \mathsf{reset}(x) & \text{otherwise}
+        \{\mathsf{reset}(x)\} & \text{otherwise}
     \end{cases}
 \]
 
