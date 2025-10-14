@@ -10,11 +10,11 @@ import random
 import time
 import threading
 import math
-import torch
 from typing import Tuple
-import requests
 import paho.mqtt.client as mqtt
 import json
+import queue
+
 
 @dataclass
 class Pedestrian:
@@ -48,6 +48,9 @@ level_brk = 0.0
 mqtt_last_update = 0.0
 
 mqtt_client = mqtt.Client()
+mqtt_queue = queue.Queue(maxsize=50)
+mqtt_lock = threading.Lock()
+
 try:
     mqtt_client.connect(BROKER, PORT, 60)
     mqtt_client.loop_start()
@@ -56,32 +59,43 @@ except Exception as e:
     print("[MQTT] Connection failed:", e)
 
 def on_mqtt_message(client, userdata, msg):
+    """Callback chiamata dal thread interno MQTT.
+    Non elabora nulla: mette solo il messaggio in coda.
+    """
+    try:
+        mqtt_queue.put_nowait(msg.payload)
+    except queue.Full:
+        print("[MQTT] Warning: queue full, message dropped")
+
+def mqtt_processor():
+    """Thread separato che elabora i messaggi MQTT ricevuti."""
     global current_action, mqtt_last_update, level_brk
 
-    try:
-        payload = json.loads(msg.payload.decode())
-        action = payload.get("action", "").lower()
-        lvl = payload.get("level", None)
-        if lvl is not None:
-            try:
-                level_brk = float(lvl)
-                level_brk = max(0.0, min(level_brk, 1.0)) 
-            except ValueError:
-                level_brk = 0.0
-        else:
-            level_brk = 0.0
+    while True:
+        try:
+            payload_raw = mqtt_queue.get()  # blocca finché c'è un messaggio
+            payload = json.loads(payload_raw.decode())
 
-        print(str(payload))
-        print(str(action))
-        if action in ["emergency_brake", "warning", "mild_brake", "normal", "_"]:
-            if action != "_":
-                current_action = action
-                mqtt_last_update = time.time()
-                print(f"[MQTT] Action received: {action}")
-        else:
-            print(f"[MQTT] Unknown action: {action}")
-    except Exception as e:
-        print("[MQTT] Error parsing message:", e)
+            action = payload.get("action", "").lower()
+            lvl = payload.get("level", None)
+
+            if lvl is not None:
+                try:
+                    lvl = float(lvl)
+                    lvl = max(0.0, min(lvl, 1.0))
+                except ValueError:
+                    lvl = 0.0
+            else:
+                lvl = 0.0
+
+            if action in ["emergency_brake", "warning", "mild_brake", "normal"]:
+                with mqtt_lock:
+                    current_action = action
+                    level_brk = lvl
+                    mqtt_last_update = time.time()
+
+        except Exception as e:
+            print("[MQTT] Error in processor:", e)
 
 mqtt_client.on_message = on_mqtt_message
 mqtt_client.subscribe(TOPIC_REC)
@@ -433,7 +447,7 @@ def send_mqtt_async(payload: dict):
     threading.Thread(target=_send, daemon=True).start()
 
 
-def max_yaw_allowed(distance):
+def max_yaw_allowed(distance, vehicle_speed_mps):
     """
     Restituisce l'angolo massimo (in gradi) che consideriamo crossing.
     - 0 m  → +-37°
@@ -528,7 +542,8 @@ def process_image():
             relative_yaw = yaw_deg - steer_angle_deg
 
             # ampiezza del cono visivo in base alla distanza
-            threshold = max_yaw_allowed(closest_ped.distance)
+            threshold = max_yaw_allowed(closest_ped.distance, vehicle_speed_mps)
+            
 
             # crossing: pedone entro il cono centrato sulle ruote
             crossing = 1 if abs(relative_yaw) <= threshold else 0
@@ -548,17 +563,17 @@ def process_image():
             "is_crossing": crossing if conf else 0
         }
 
-        # send_mqtt_async(payload)
+        send_mqtt_async(payload)
 
         # stampa di debug
-        print("[SUMMARY]",
-              f"speed={vehicle_speed_mps:.2f} m/s",
-              f"confidence={payload['confidence']:.2f}",
-              f"dist={payload['camera_distance']:.1f}m" if payload['camera_distance'] else "dist=None",
-              f"yaw={payload['camera_yaw_deg']:.1f}°" if payload['camera_yaw_deg'] else "yaw=None",
-              f"ttc={payload['ttc']:.2f}" if payload['ttc'] else "ttc=None",
-              f"is_crossing={payload['is_crossing']}"
-        )
+        # print("[SUMMARY]",
+        #       f"speed={vehicle_speed_mps:.2f} m/s",
+        #       f"confidence={payload['confidence']:.2f}",
+        #       f"dist={payload['camera_distance']:.1f}m" if payload['camera_distance'] else "dist=None",
+        #       f"yaw={payload['camera_yaw_deg']:.1f}°" if payload['camera_yaw_deg'] else "yaw=None",
+        #       f"ttc={payload['ttc']:.2f}" if payload['ttc'] else "ttc=None",
+        #       f"is_crossing={payload['is_crossing']}"
+        # )
 
         # salva per rendering
         with processed_output_lock:
@@ -630,6 +645,10 @@ class GameLoop(object):
                 if self.args.sync:
                     self.sim_world.tick()
                 clock.tick_busy_loop(self.fps)
+                with mqtt_lock:
+                    local_action = current_action
+                    local_level_brk = level_brk
+                    local_last_update = mqtt_last_update
 
                 # Visualizzazione OpenCV
                 if CAMERA_DEBUG:
@@ -716,18 +735,18 @@ class GameLoop(object):
                         print(f"[DISPLAY] Error updating OpenCV windows: {e}")
 
                 # Timeout per resettare stato
-                if time.time() - mqtt_last_update > 0.7 and current_action != "normal":
-                    current_action = "normal"
+                if time.time() - local_last_update > 0.7 and local_action != "normal":
+                    local_action = "normal"
 
                 vel = self.world.player.get_velocity()
                 speed_mps = math.sqrt(vel.x**2 + vel.y**2 + vel.z**2)
                 speed_kmh = speed_mps * 3.6
                 
-                if speed_kmh < 8 and current_action != "emergency_brake":
-                    current_action="normal"
+                if speed_kmh < 8 and local_action != "emergency_brake":
+                    local_action="normal"
 
                 # Eventi utente (solo se in stato 'normal') 
-                if current_action == "normal":
+                if local_action == "normal":
                     if self.controller.parse_events(self.world, clock):
                         pass
                 else:
@@ -736,21 +755,21 @@ class GameLoop(object):
                 control = carla.VehicleControl()
 
                 # Applica comportamento in base allo stato MQTT
-                if current_action == "emergency_brake":
+                if local_action == "emergency_brake":
                     control.throttle = 0.0
                     control.brake = 1.0
                     self.world.player.apply_control(control)
                     print("[MQTT] Frenata di emergenza attiva")
                     continue
 
-                elif current_action == "mild_brake":
+                elif local_action == "mild_brake":
                     control.throttle = 0.0
-                    control.brake = level_brk if level_brk > 0 else 0.3
+                    control.brake = local_level_brk if local_level_brk > 0 else 0.3
                     self.world.player.apply_control(control)
                     print(f"[MQTT] Frenata lieve applicata (level={control.brake:.2f})")
                     continue
 
-                elif current_action == "warning":
+                elif local_action == "warning":
                     print("[MQTT] Avviso al conducente: pedone vicino")
 
                 # Render HUD e mondo 
