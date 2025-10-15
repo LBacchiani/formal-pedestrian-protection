@@ -37,6 +37,8 @@ def on_message(client, userdata, msg):
         confidence = data.get("confidence")      # float [0,1]
         ttc = data.get("ttc")                    # float seconds
         is_crossing = data.get("is_crossing")    # int {0,1}
+
+        print(f"Received data: confidence={confidence}, ttc={ttc}, is_crossing={is_crossing}")
         
         # Update automaton with new data
         automaton.update_data(confidence=confidence, ttc=ttc, is_crossing=is_crossing)

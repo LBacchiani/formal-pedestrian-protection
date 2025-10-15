@@ -100,6 +100,10 @@ def mqtt_processor():
 mqtt_client.on_message = on_mqtt_message
 mqtt_client.subscribe(TOPIC_REC)
 
+# Avvia il thread che consuma la coda MQTT
+processor_thread = threading.Thread(target=mqtt_processor, daemon=True)
+processor_thread.start()
+
 
 model = YOLO("yolov8n.pt")
 
@@ -508,7 +512,7 @@ def process_image():
             distance = get_distance_to_pedestrian_centroid(centroid, depth_array)
             yaw, pitch = pixel_to_angle(centroid[0], centroid[1], rgb_camera.calibration)
 
-            time_to_collision = distance / vehicle_speed_mps if vehicle_speed_mps > 0.01 else float('inf')
+            time_to_collision = (distance / vehicle_speed_mps * 1000.0) if vehicle_speed_mps > 0.01 else float('inf')
 
             detected_pedestrians.append(Pedestrian(
                 x=centroid[0],
@@ -760,14 +764,12 @@ class GameLoop(object):
                     control.brake = 1.0
                     self.world.player.apply_control(control)
                     print("[MQTT] Frenata di emergenza attiva")
-                    continue
 
                 elif local_action == "mild_brake":
                     control.throttle = 0.0
                     control.brake = local_level_brk if local_level_brk > 0 else 0.3
                     self.world.player.apply_control(control)
                     print(f"[MQTT] Frenata lieve applicata (level={control.brake:.2f})")
-                    continue
 
                 elif local_action == "warning":
                     print("[MQTT] Avviso al conducente: pedone vicino")
