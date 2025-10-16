@@ -17,7 +17,7 @@ RT_HALF_FRAMES = max(1, int(RT_WINDOW_FRAMES / 2))  # Half reaction window (mini
 S_DISTANCE_CONSENSUS = 0.8
 SR_DISTANCE_CONSENSUS = 0.6
 RC_DISTANCE_CONSENSUS = 0.4
-C_DISTANCE_CONSENSUS = 0.2
+C_DISTANCE_CONSENSUS = 0.3
 CONSENSUS = 0.8
 
 # ============================================================================
@@ -29,8 +29,8 @@ TH_D_STALE = 300
 TH_C_STALE = 300
 
 # Time-to-collision thresholds (seconds)
-TH_TTC_S = 4000 # Safe TTC threshold
-TH_TTC_R = 2000 # Risky TTC threshold
+TH_TTC_S = 6000 # Safe TTC threshold
+TH_TTC_R = 4000 # Risky TTC threshold
 TH_TTC_C = 1000 # Critical TTC threshold
 
 # Staleness upper bounds
@@ -67,9 +67,9 @@ class Action(Enum):
     # BRAKE_TO_THROTTLE = "brake_to_throttle"
     # NONE = "_"  # No action
 
-    BRAKE = "mild_brake"
+    BRAKE = "brake" #  brake con 30% di frenata e 0 di gas 
     STOP = "emergency_brake"
-    THROTTLE_ACCELERATION = "mild_brake" #mild brake con 0 di frenata e 0 di gas 
+    THROTTLE_ACCELERATION = "mild_brake" # mild brake con 0 di frenata e 0 di gas 
     ALERTING_DRIVER = "warning"
     REMOVE_ALERT = "normal"
     STOP_THROTTLING = "normal" #  
@@ -210,10 +210,10 @@ class PedestrianProtectionAutomaton:
                 return State.SAFE_WARNING, Action.ALERTING_DRIVER
             # e3: To Throttling
             if valid_d and ((not valid_c and rc_dist) or (valid_c and sr_dist)):
-                return State.THROTTLING, Action.THROTTLE_ACCELERATION
+                return State.THROTTLING, Action.ALERTING_DRIVER
             # e4: To CriticalSlowdown
             if valid_d and not valid_c and c_dist:
-                return State.CRITICAL_SLOWDOWN, Action.BRAKE
+                return State.CRITICAL_SLOWDOWN, Action.ALERTING_DRIVER
             # e5: To SoftBraking
             if valid_d and valid_c and rc_dist:
                 return State.SOFT_BRAKING, Action.BRAKE
@@ -224,16 +224,16 @@ class PedestrianProtectionAutomaton:
         elif self.state == State.SAFE_WARNING:
             # e7: To Normal (including handover on uncertainty timeout)
             if not valid_d or s_dist or self.s_u >= MAX_UNCERTAIN:
-                return State.NORMAL, Action.NONE
+                return State.NORMAL, Action.REMOVE_ALERT
             # e8: Stay in SafeWarning (including uncertain with timeout not reached)
             if (valid_d and not valid_c and sr_dist) or (valid_d and unc_dist and self.s_u < MAX_UNCERTAIN):
                 return State.SAFE_WARNING, Action.NONE
             # e9: To Throttling
             if valid_d and ((not valid_c and rc_dist) or (valid_c and sr_dist)):
-                return State.THROTTLING, Action.THROTTLE_ACCELERATION
+                return State.THROTTLING, Action.ALERTING_DRIVER
             # e10: To CriticalSlowdown
             if valid_d and not valid_c and c_dist:
-                return State.CRITICAL_SLOWDOWN, Action.BRAKE
+                return State.CRITICAL_SLOWDOWN, Action.ALERTING_DRIVER
             # e11: To SoftBraking
             if valid_d and valid_c and rc_dist:
                 return State.SOFT_BRAKING, Action.BRAKE
@@ -253,7 +253,7 @@ class PedestrianProtectionAutomaton:
                 return State.THROTTLING, Action.NONE
             # e16: To CriticalSlowdown
             if valid_d and not valid_c and c_dist:
-                return State.CRITICAL_SLOWDOWN, Action.BRAKE
+                return State.CRITICAL_SLOWDOWN, Action.ALERTING_DRIVER
             # e17: To SoftBraking
             if valid_d and valid_c and rc_dist:
                 return State.SOFT_BRAKING, Action.BRAKE
@@ -270,7 +270,7 @@ class PedestrianProtectionAutomaton:
                 return State.SAFE_WARNING, Action.STOP_BRAKING
             # e21: To Throttling
             if (not valid_c and rc_dist) or (valid_c and sr_dist):
-                return State.THROTTLING, Action.BRAKE_TO_THROTTLE
+                return State.THROTTLING, Action.ALERTING_DRIVER
             # e22: Stay in CriticalSlowdown (including uncertain with timeout not reached)
             if (valid_d and not valid_c and c_dist) or (valid_d and unc_dist and self.s_u < MAX_UNCERTAIN):
                 return State.CRITICAL_SLOWDOWN, Action.NONE
@@ -290,7 +290,7 @@ class PedestrianProtectionAutomaton:
                 return State.SAFE_WARNING, Action.STOP_BRAKING
             # e27: Stay in SoftBraking (including uncertain with timeout not reached)
             if (valid_d and valid_c and rc_dist) or (valid_c and valid_d and unc_dist and self.s_u < MAX_UNCERTAIN):
-                return State.SOFT_BRAKING, Action.NONE
+                return State.SOFT_BRAKING, Action.BRAKE
             # e28: To EmergencyBraking
             if valid_d and valid_c and c_dist:
                 return State.EMERGENCY_BRAKING, Action.STOP
@@ -298,7 +298,7 @@ class PedestrianProtectionAutomaton:
         elif self.state == State.EMERGENCY_BRAKING:
             # e29: To Normal
             if not det or not cross:
-                return State.NORMAL, Action.NONE
+                return State.NORMAL, Action.STOP_BRAKING
             # e30: Stay in EmergencyBraking
             if cross:
                 return State.EMERGENCY_BRAKING, Action.NONE

@@ -14,6 +14,11 @@ from typing import Tuple
 import paho.mqtt.client as mqtt
 import json
 import queue
+import atexit
+import uuid
+import os
+import signal
+import sys
 
 
 @dataclass
@@ -43,13 +48,22 @@ CAMERA_WIDTH = 1080
 CAMERA_HEIGHT = 720
 VIEW_FOV = 80
 
+METRICS_PATH = "metrics_log.jsonl"   # file append-only
+RUN_ID = str(uuid.uuid4())
+RUN_START_TS = time.time()
+
 current_action = "normal"
-level_brk = 0.0
+level_brk = 0.05
 mqtt_last_update = 0.0
+level_intensity = 1.0
 
 mqtt_client = mqtt.Client()
 mqtt_queue = queue.Queue(maxsize=50)
 mqtt_lock = threading.Lock()
+
+if not os.path.exists(METRICS_PATH):
+    with open(METRICS_PATH, "w", encoding="utf-8") as f:
+        f.write("")  # crea file vuoto se non esiste
 
 try:
     mqtt_client.connect(BROKER, PORT, 60)
@@ -67,9 +81,14 @@ def on_mqtt_message(client, userdata, msg):
     except queue.Full:
         print("[MQTT] Warning: queue full, message dropped")
 
+def smooth_increase(level_brk, level_intensity, rate):
+    delta = rate * (level_intensity ** 2)  # crescita lenta all'inizio
+    level_brk += delta
+    return min(level_brk, 0.25)
+
 def mqtt_processor():
     """Thread separato che elabora i messaggi MQTT ricevuti."""
-    global current_action, mqtt_last_update, level_brk
+    global current_action, mqtt_last_update, level_brk, level_intensity
 
     while True:
         try:
@@ -88,10 +107,15 @@ def mqtt_processor():
             else:
                 lvl = 0.0
 
-            if action in ["emergency_brake", "warning", "mild_brake", "normal"]:
+            if action in ["emergency_brake", "warning", "mild_brake", "brake", "normal"]:
                 with mqtt_lock:
                     current_action = action
-                    level_brk = lvl
+                    if current_action == "normal":
+                        level_brk = 0.05
+                        level_intensity = 1
+                    if current_action == "brake":
+                        level_intensity += 1
+                        level_brk = smooth_increase(level_brk, level_intensity, 0.0007)
                     mqtt_last_update = time.time()
 
         except Exception as e:
@@ -119,6 +143,9 @@ spectator = world.get_spectator()
 PEDESTRIAN = "DET"  # DET || "RANDOM"  
 
 ### Modalità Sole ### 
+weather = carla.WeatherParameters(
+    cloudiness=0.0
+)
 
 ### Modalità notte ###
 # weather = carla.WeatherParameters(
@@ -144,6 +171,31 @@ PEDESTRIAN = "DET"  # DET || "RANDOM"
 world = client.get_world()
 # world.set_weather(weather)
 
+metrics = {
+    "run_id": RUN_ID,
+    "started_at": RUN_START_TS,
+    "ended_at": None,
+    "scenario": {
+        "num_walkers": NUM_WALKERS,
+        "pedestrian_mode": PEDESTRIAN,
+        "weather": {
+            "cloudiness": weather.cloudiness,
+            "precipitation": weather.precipitation,
+            "precipitation_deposits": weather.precipitation_deposits,
+            "wind_intensity": weather.wind_intensity,
+            "sun_altitude_angle": weather.sun_altitude_angle,
+            "fog_density": weather.fog_density,
+            "fog_distance": weather.fog_distance,
+            "fog_falloff": weather.fog_falloff
+        }
+    },
+    "collisions": {
+        "count": 0,
+        "binary": 0,          # 1 se almeno una collisione
+        "events": []          # lista dettagli per contatto
+    }
+}
+
 if MODE == Mode.STEERING_WHEEL:
     import manual_control_steeringwheel_ubuntu as mc
     from importlib import reload
@@ -163,11 +215,6 @@ input_depth_image_lock = threading.Lock()
 
 processed_output = None
 processed_output_lock = threading.Lock()
-
-def emergency_brake():
-    global vehicle
-    control = carla.VehicleControl(throttle=0.0, brake=1.0)
-    vehicle.apply_control(control)
 
 
 def remove_all(world: carla.World):
@@ -261,13 +308,15 @@ def setup_camera(car: carla.Vehicle):
 def spawn_walker(world: carla.World):
     blueprint_library = world.get_blueprint_library()
 
-    allowed_ids = ["walker.pedestrian.0042", "walker.pedestrian.0039", "walker.pedestrian.0037"]
+    allowed_ids = ["walker.pedestrian.0042"]
     walker_blueprints = [bp for bp in blueprint_library.filter('walker.pedestrian.*') if bp.id in allowed_ids]
 
     if not walker_blueprints:
         return None, None
 
     walker_bp = random.choice(walker_blueprints)
+    if walker_bp.has_attribute("is_invincible"):
+        walker_bp.set_attribute("is_invincible", "false")
 
     if walker_bp.has_attribute("speed"):
         speed = random.uniform(0.8, 2.0)
@@ -284,6 +333,7 @@ def spawn_walker(world: carla.World):
     walker = world.try_spawn_actor(walker_bp, spawn_point)
     if walker is None:
         return None, None
+
 
     # aggiungi controller AI
     controller_bp = blueprint_library.find('controller.ai.walker')
@@ -308,7 +358,7 @@ def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist
         existing_positions = []
 
     blueprint_library = world.get_blueprint_library()
-    allowed_ids = ["walker.pedestrian.0042", "walker.pedestrian.0039", "walker.pedestrian.0037"]
+    allowed_ids = ["walker.pedestrian.0042"]
     walker_blueprints = [
         bp for bp in blueprint_library.filter('walker.pedestrian.*') if bp.id in allowed_ids
     ]
@@ -316,6 +366,12 @@ def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist
         return None, None, existing_positions
 
     walker_bp = random.choice(walker_blueprints)
+
+    # --- disattiva invincibilità prima dello spawn ---
+    if walker_bp.has_attribute("is_invincible"):
+        walker_bp.set_attribute("is_invincible", "false")
+
+    # --- imposta velocità casuale ---
     if walker_bp.has_attribute("speed"):
         speed = random.uniform(1.0, 1.6)
         walker_bp.set_attribute('speed', str(speed))
@@ -470,7 +526,7 @@ def process_image():
     global input_rgb_image, input_depth_image, processed_output
 
     last_inference_time = 0.0
-    target_dt = 0.125  # 10Hz
+    target_dt = 0.130  # 10Hz
     crossing = 0
 
     print("[PROCESS] Avviato thread di elaborazione immagini...")
@@ -652,7 +708,7 @@ class GameLoop(object):
                 with mqtt_lock:
                     local_action = current_action
                     local_level_brk = level_brk
-                    local_last_update = mqtt_last_update
+                    # local_last_update = mqtt_last_update
 
                 # Visualizzazione OpenCV
                 if CAMERA_DEBUG:
@@ -739,41 +795,57 @@ class GameLoop(object):
                         print(f"[DISPLAY] Error updating OpenCV windows: {e}")
 
                 # Timeout per resettare stato
-                if time.time() - local_last_update > 0.7 and local_action != "normal":
-                    local_action = "normal"
+                # if time.time() - local_last_update > 0.7 and local_action != "normal":
+                #     local_action = "normal"
 
                 vel = self.world.player.get_velocity()
                 speed_mps = math.sqrt(vel.x**2 + vel.y**2 + vel.z**2)
                 speed_kmh = speed_mps * 3.6
                 
-                if speed_kmh < 8 and local_action != "emergency_brake":
-                    local_action="normal"
+                # if speed_kmh < 8 and local_action != "emergency_brake":
+                #     local_action="normal"
 
                 # Eventi utente (solo se in stato 'normal') 
                 if local_action == "normal":
-                    if self.controller.parse_events(self.world, clock):
-                        pass
-                else:
-                    pygame.event.pump()
+                    # print("[MQTT] Normal")
+                    self.controller.parse_events(self.world, clock)
+                # else:
+                #     pygame.event.pump()  # evita freeze di pygame
 
+                # Parti sempre dallo stato attuale del veicolo
+                current_control = vehicle.get_control()
                 control = carla.VehicleControl()
+
+                # Mantieni sempre lo sterzo attuale del volante
+                control.steer = current_control.steer
+
+                # print(local_action)
 
                 # Applica comportamento in base allo stato MQTT
                 if local_action == "emergency_brake":
+                    # Sovrascrivi solo throttle e brake
                     control.throttle = 0.0
                     control.brake = 1.0
-                    self.world.player.apply_control(control)
+                    vehicle.apply_control(control)
                     print("[MQTT] Frenata di emergenza attiva")
+
+                elif local_action == "brake":
+                    control.throttle = 0.0
+                    control.brake = local_level_brk #if local_level_brk > 0 else 0.3
+                    vehicle.apply_control(control)
+                    print(f"[MQTT] Frenata lieve applicata (level={control.brake:.2f})")
 
                 elif local_action == "mild_brake":
                     control.throttle = 0.0
-                    control.brake = local_level_brk if local_level_brk > 0 else 0.3
-                    self.world.player.apply_control(control)
-                    print(f"[MQTT] Frenata lieve applicata (level={control.brake:.2f})")
+                    control.brake = 0.0
+                    vehicle.apply_control(control)
+                    print("[MQTT] Rilasciato acceleratore")
 
                 elif local_action == "warning":
+                    # Mantieni tutto (acceleratore e freno) come sono
+                    self.controller.parse_events(self.world, clock)
                     print("[MQTT] Avviso al conducente: pedone vicino")
-
+                
                 # Render HUD e mondo 
                 self.render(clock)
 
@@ -864,6 +936,51 @@ game_loop = setup()
 vehicle = world.get_actors().filter('vehicle.*')[0]
 rgb_camera, depth_camera = setup_camera(vehicle)
 
+# === Sensore di collisione ===
+collision_data = {
+    "count": 0,
+    "last_time": 0.0,
+    "last_actor": None,
+    "cooldown": 10.0  # secondi tra due eventi sullo stesso attore
+}
+
+def collision_callback(event):
+    global collision_data, metrics
+    other_actor = event.other_actor
+    actor_id = other_actor.id
+    actor_type = other_actor.type_id
+
+    # Calcola intensità urto
+    impulse = event.normal_impulse
+    magnitude = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
+    now = time.time()
+
+    # --- Filtraggio logico per evitare eventi multipli ---
+    if (actor_id == collision_data["last_actor"]) and (now - collision_data["last_time"] < collision_data["cooldown"]):
+        return  # stesso attore, stesso impatto → ignora
+
+    # --- Registra evento valido ---
+    collision_data["count"] += 1
+    collision_data["last_time"] = now
+    collision_data["last_actor"] = actor_id
+
+    metrics["collisions"]["count"] = collision_data["count"]
+    metrics["collisions"]["binary"] = 1
+    metrics["collisions"]["events"].append({
+        "t": now,
+        "other_actor": actor_type,
+        "intensity": magnitude
+    })
+
+    print(f"[COLLISION] #{collision_data['count']} with {actor_type}, intensity={magnitude:.2f}")
+
+
+# Blueprint sensore
+blueprint_library = world.get_blueprint_library()
+collision_bp = blueprint_library.find('sensor.other.collision')
+collision_sensor = world.spawn_actor(collision_bp, carla.Transform(), attach_to=vehicle)
+collision_sensor.listen(lambda event: collision_callback(event))
+
 def rgb_camera_callback(image):
     try:
         global input_rgb_image
@@ -883,14 +1000,61 @@ def depth_camera_callback(image):
 rgb_camera.listen(lambda image: rgb_camera_callback(image))
 depth_camera.listen(lambda image: depth_camera_callback(image))
 
+def _append_metrics_to_file():
+    try:
+        # assicura campi finali coerenti
+        metrics["ended_at"] = metrics.get("ended_at") or time.time()
+        payload = json.dumps(metrics, ensure_ascii=False)
+        with open(METRICS_PATH, "a", encoding="utf-8") as f:
+            f.write(payload + "\n")
+        print(f"[METRICS] Appended run metrics to {os.path.abspath(METRICS_PATH)}")
+    except Exception as e:
+        print("[METRICS] Failed to append metrics:", e)
+
+def _graceful_exit_handler(signum=None, frame=None):
+    # Evita doppio write
+    if metrics.get("_flushed"):
+        return
+    metrics["_flushed"] = True
+    _append_metrics_to_file()
+
+    print(f"[EXIT] Received signal {signum}, shutting down...")
+
+    # Chiudi finestre e termina processo
+    try:
+        cv2.destroyAllWindows()
+        pygame.quit()
+    except Exception:
+        pass
+
+    # Interrompi l'esecuzione
+    sys.exit(0)
+
+
+
+atexit.register(_graceful_exit_handler)
+for _sig in (signal.SIGINT, signal.SIGTERM):
+    try:
+        signal.signal(_sig, _graceful_exit_handler)
+    except Exception:
+        pass
+
 threading.Thread(target=process_image, daemon=True).start()
 
 def cleanup():
-    remove_all(world)
+    try:
+        # marca fine run e scrivi
+        metrics["ended_at"] = time.time()
+        if not metrics.get("_flushed"):
+            metrics["_flushed"] = True
+            _append_metrics_to_file()
+    finally:
+        remove_all(world)
+
 
 try:
     game_loop.start()
 except KeyboardInterrupt:
-    cleanup()
+    print("\n[EXIT] Keyboard interrupt, cleaning up...")
 finally:
     cleanup()
