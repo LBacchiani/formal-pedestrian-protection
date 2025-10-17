@@ -56,6 +56,7 @@ current_action = "normal"
 level_brk = 0.05
 mqtt_last_update = 0.0
 level_intensity = 1.0
+velocity = 0.0
 
 mqtt_client = mqtt.Client()
 mqtt_queue = queue.Queue(maxsize=50)
@@ -81,14 +82,25 @@ def on_mqtt_message(client, userdata, msg):
     except queue.Full:
         print("[MQTT] Warning: queue full, message dropped")
 
-def smooth_increase(level_brk, level_intensity, rate):
-    delta = rate * (level_intensity ** 2)  # crescita lenta all'inizio
+def smooth_increase(level_brk, level_intensity, rate, speed):
+    # Normalizziamo la velocità tra 0 e 1 rispetto a un valore massimo (es. 50 km/h)
+    max_speed = 50.0
+    speed_factor = min(speed / max_speed, 1.0)
+
+    # Più la velocità è alta, più il rate di crescita aumenta leggermente
+    delta = rate * (level_intensity ** 2) * (0.5 + speed_factor * 1.5)
+
+    # Aggiorniamo il livello di frenata
     level_brk += delta
-    return min(level_brk, 0.25)
+
+    # Limite massimo dipendente anche dalla velocità (più veloce → più freno ammesso)
+    max_brk = 0.15 + 0.25 * speed_factor  # tra 0.15 e 0.4
+
+    return min(level_brk, max_brk)
 
 def mqtt_processor():
     """Thread separato che elabora i messaggi MQTT ricevuti."""
-    global current_action, mqtt_last_update, level_brk, level_intensity
+    global current_action, mqtt_last_update, level_brk, level_intensity, velocity
 
     while True:
         try:
@@ -115,7 +127,7 @@ def mqtt_processor():
                         level_intensity = 1
                     if current_action == "brake":
                         level_intensity += 1
-                        level_brk = smooth_increase(level_brk, level_intensity, 0.0007)
+                        level_brk = smooth_increase(level_brk, level_intensity, 0.0007, velocity)
                     mqtt_last_update = time.time()
 
         except Exception as e:
@@ -507,7 +519,7 @@ def send_mqtt_async(payload: dict):
     threading.Thread(target=_send, daemon=True).start()
 
 
-def max_yaw_allowed(distance, vehicle_speed_mps):
+def max_yaw_allowed(distance):
     """
     Restituisce l'angolo massimo (in gradi) che consideriamo crossing.
     - 0 m  → +-37°
@@ -523,10 +535,10 @@ def max_yaw_allowed(distance, vehicle_speed_mps):
 
 
 def process_image():
-    global input_rgb_image, input_depth_image, processed_output
+    global input_rgb_image, input_depth_image, processed_output, velocity
 
     last_inference_time = 0.0
-    target_dt = 0.130  # 10Hz
+    target_dt = 0.105  # 10Hz
     crossing = 0
 
     print("[PROCESS] Avviato thread di elaborazione immagini...")
@@ -557,7 +569,7 @@ def process_image():
 
         # velocità veicolo
         vehicle_speed = vehicle.get_velocity()
-        vehicle_speed_mps = math.sqrt(vehicle_speed.x**2 + vehicle_speed.y**2 + vehicle_speed.z**2)
+        velocity = math.sqrt(vehicle_speed.x**2 + vehicle_speed.y**2 + vehicle_speed.z**2)
 
         # detection pedoni (YOLO)
         detections = detect_pedestrians(rgb_array)
@@ -568,7 +580,7 @@ def process_image():
             distance = get_distance_to_pedestrian_centroid(centroid, depth_array)
             yaw, pitch = pixel_to_angle(centroid[0], centroid[1], rgb_camera.calibration)
 
-            time_to_collision = (distance / vehicle_speed_mps * 1000.0) if vehicle_speed_mps > 0.01 else float('inf')
+            time_to_collision = (distance / velocity * 1000.0) if velocity > 0.01 else float('inf')
 
             detected_pedestrians.append(Pedestrian(
                 x=centroid[0],
@@ -602,7 +614,7 @@ def process_image():
             relative_yaw = yaw_deg - steer_angle_deg
 
             # ampiezza del cono visivo in base alla distanza
-            threshold = max_yaw_allowed(closest_ped.distance, vehicle_speed_mps)
+            threshold = max_yaw_allowed(closest_ped.distance)
             
 
             # crossing: pedone entro il cono centrato sulle ruote
@@ -614,7 +626,7 @@ def process_image():
         # prepara payload
         payload = {
             "timestamp": now,
-            "vehicle_speed": vehicle_speed_mps,
+            "vehicle_speed": velocity,
             "confidence": float(conf),
             "camera_distance": closest_ped.distance if closest_ped else None,
             "camera_yaw_deg": math.degrees(yaw) if yaw is not None else None,
@@ -627,7 +639,7 @@ def process_image():
 
         # stampa di debug
         # print("[SUMMARY]",
-        #       f"speed={vehicle_speed_mps:.2f} m/s",
+        #       f"speed={velocity:.2f} m/s",
         #       f"confidence={payload['confidence']:.2f}",
         #       f"dist={payload['camera_distance']:.1f}m" if payload['camera_distance'] else "dist=None",
         #       f"yaw={payload['camera_yaw_deg']:.1f}°" if payload['camera_yaw_deg'] else "yaw=None",
