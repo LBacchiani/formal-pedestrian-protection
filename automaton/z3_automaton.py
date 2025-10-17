@@ -1,400 +1,428 @@
-"""
-Z3 setup and helper functions for pedestrian protection automaton verification.
-
-This module provides the Z3 encoding of the automaton's state variables,
-helper predicates, guard conditions, and global invariants enforcement.
-"""
-
 from z3 import *
 from automaton import *
-
+import math
 
 # ============================================================================
-# Z3 VARIABLE DECLARATIONS
+# DISCRETE STATES (Q)
 # ============================================================================
+State, (Normal, SafeWarning, Throttling, SoftBraking, EmergencyBraking) = EnumSort(
+    'State', 
+    ['Normal', 'SafeWarning', 'Throttling', 'SoftBraking', 'EmergencyBraking']
+)
 
-def create_buffer_vars(name_prefix: str, size: int, sort):
-    """Create Z3 variables for a buffer of given size and sort."""
-    return [Const(f"{name_prefix}_{i}", sort) for i in range(size)]
-
-
-def create_automaton_vars():
+# ============================================================================
+# CONTINUOUS VARIABLES (X)
+# ============================================================================
+def declare_continuous_vars(suffix=""):
     """
-    Create all Z3 variables representing the automaton state.
+    Declare continuous variables X = {C_0, ..., C_{n-1}, TTC_0, ..., TTC_{n-1}, 
+                                      cs_0, ..., cs_{n-1}, s_d, s_c, s_u, t}
+    """
+    # Confidence levels B_C = C_0, ..., C_{n-1}
+    B_C = [Real(f'C_{i}{suffix}') for i in range(N)]
     
-    Returns:
-        Dictionary containing all Z3 variables
-    """
-    # Buffers
-    B_C = create_buffer_vars("B_C", N, RealSort())
-    B_TTC = create_buffer_vars("B_TTC", N, RealSort())
-    B_cross = create_buffer_vars("B_cross", N, IntSort())
+    # Time-to-collision B_TTC = TTC_0, ..., TTC_{n-1}
+    B_TTC = [Real(f'TTC_{i}{suffix}') for i in range(N)]
+    
+    # Crossing states B_cs = cs_0, ..., cs_{n-1}
+    B_cs = [Int(f'cs_{i}{suffix}') for i in range(N)]
     
     # Staleness timers
-    s_d = Real('s_d')
-    s_c = Real('s_c')
-    s_u = Real('s_u')  # Uncertainty timer
+    s_d = Real(f's_d{suffix}')  # Detection staleness
+    s_c = Real(f's_c{suffix}')  # Crossing staleness
+    s_u = Real(f's_u{suffix}')  # Uncertain staleness
+    t = Real(f't{suffix}')      # Time since last sensor value
     
-    # Timing variables
-    sns = Int('sns')  # Sensor flag: 0 or 1
-    t = Real('t')  # Time since last sensor value
-    
-    return {
-        'B_C': B_C,
-        'B_TTC': B_TTC,
-        'B_cross': B_cross,
-        's_d': s_d,
-        's_c': s_c,
-        's_u': s_u,
-        'sns': sns,
-        't': t
-    }
-
+    return B_C, B_TTC, B_cs, s_d, s_c, s_u, t
 
 # ============================================================================
-# GLOBAL INVARIANTS / BUFFER CONSTRAINTS
+# INITIAL STATES (Init)
 # ============================================================================
-
-def buffer_constraints(vars_dict):
+def initial_state(q, B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
     """
-    Create Z3 constraints enforcing global invariants (I(...)).
+    Init = {(Normal, X_0)} where X_0 = {C_i = 0, TTC_i = NO_TTC, cs_i = 0, 
+                                         s_d = 0, s_c = 0, s_u = 0, t = 0}
     """
-    constraints = []
-    B_C = vars_dict['B_C']
-    B_TTC = vars_dict['B_TTC']
-    B_cross = vars_dict['B_cross']
-    s_d = vars_dict['s_d']
-    s_c = vars_dict['s_c']
-    s_u = vars_dict['s_u']
-    sns = vars_dict['sns']
-    t = vars_dict['t']
-
-    # Sensor flag is boolean
-    constraints.append(Or(sns == 0, sns == 1))
-    
-    # Time is non-negative
-    constraints.append(And(t >= 0, t < CAMERA_FREQ))
-
-    constraints.append(Implies(sns == 1, t == 0))
-    constraints.append(Implies(sns == 0, t >= CAMERA_FREQ))
-
-    # Element bounds and B_TTC → B_C linkage
-    for i in range(N):
-        # Confidence values are probabilities
-        constraints.append(And(B_C[i] >= 0, B_C[i] <= 1))
-        
-        # TTC values are positive
-        constraints.append(B_TTC[i] > 0)
-        
-        # Crossing is boolean
-        constraints.append(Or(B_cross[i] == 0, B_cross[i] == 1))
-        
-        # Linkage: high confidence iff TTC is not NO_TTC
-        # If C_i < TH_C then TTC_i = NO_TTC
-        # If C_i >= TH_C then TTC_i < NO_TTC
-        constraints.append(If(B_C[i] < TH_C, B_TTC[i] == NO_TTC, B_TTC[i] < NO_TTC) )
-        
-        # If crossing, must have high confidence
-        constraints.append(Implies(B_cross[i] == 1, B_C[i] >= TH_C))
-    
-    # Staleness timers computation for detection
-    first_idx_d = Int('first_idx_d')
-    constraints.append(Or([first_idx_d == i for i in range(N)] + [first_idx_d == -1]))
+    constraints = [q == Normal]
     
     for i in range(N):
-        constraints.append(Implies(first_idx_d == i, And(B_C[i] >= TH_C, And([B_C[j] < TH_C for j in range(i)]), detected(B_C) )))
+        constraints.append(B_C[i] == 0)
+        constraints.append(B_TTC[i] == NO_TTC)
+        constraints.append(B_cs[i] == 0)
     
-    constraints.append(Implies(first_idx_d == -1, And([B_C[i] < TH_C for i in range(N)])))
-    constraints.append(s_d == If(first_idx_d >= 0, CAMERA_FREQ * first_idx_d, MAX_STALE))
-
-    # Staleness timers computation for crossing
-    first_idx_c = Int('first_idx_c')
-    constraints.append(Or([first_idx_c == i for i in range(N)] + [first_idx_c == -1]))
+    constraints.extend([
+        s_d == 0,
+        s_c == 0,
+        s_u == 0,
+        t == 0
+    ])
     
-    for i in range(N):
-        constraints.append(Implies(first_idx_c == i, And(B_cross[i] == 1, And([B_cross[j] == 0 for j in range(i)]), crossing(B_cross))))
-    
-    constraints.append(Implies(first_idx_c == -1, And([B_cross[i] == 0 for i in range(N)])))
-    constraints.append(s_c == If(first_idx_c >= 0, CAMERA_FREQ * first_idx_c, MAX_STALE))
-
-    # Uncertainty timer constraints
-    constraints.append(s_u >= 0)
-    constraints.append(Implies(s_d < MAX_STALE, s_u == 0))
-
-    return constraints
-
+    return And(constraints)
 
 # ============================================================================
-# HELPER PREDICATES (Z3 encoding)
+# HELPER FUNCTIONS
 # ============================================================================
 
-def detected(B_C):
+def P(condition):
     """
-    Z3 encoding of detected() predicate incorporating human reaction time.
-    A detection is valid if, within half a human reaction window's worth of frames,
-    enough frames show confidence >= TH_C.
+    P(cond) = 1 if cond is true, 0 otherwise
     """
-    limit = int(min(N, RT_WINDOW_FRAMES))
-    count = Sum([If(B_C[i] >= TH_C, 1, 0) for i in range(limit)])
+    return If(condition, 1, 0)
+
+def detected(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """
+    detected(X) = sum_{i=0}^{n-1} P(C_i >= TH_C) >= ceil(RT_H / (2 * CAM_FREQ))
+    """
+    count = Sum([P(B_C[i] >= TH_C) for i in range(N)])
     return count >= RT_HALF_FRAMES
 
+def valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """
+    valid_d(X) = detected(X) ∨ s_d < TH_D_stale
+    """
+    return Or(detected(B_C, B_TTC, B_cs, s_d, s_c, s_u, t), s_d < TH_D_STALE)
 
-def crossing(B_cross):
+def s_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
     """
-    Z3 encoding of crossing() predicate incorporating human reaction time.
-    A crossing is valid if, within half a human reaction window's worth of frames,
-    enough frames indicate crossing (B_cross == 1).
+    s_dist(X) = sum_{i=0}^{k} P(TTC_i > TH_TTC_s) >= ceil(k * CONSENSUS)
+    where k = ceil(n * S_DISTANCE_CONSENSUS)
     """
-    limit = int(min(N, RT_WINDOW_FRAMES))
-    count = Sum([B_cross[i] for i in range(limit)])
+    k = math.ceil(N * S_DISTANCE_CONSENSUS)
+    count = Sum([P(B_TTC[i] > TH_TTC_S) for i in range(k)])
+    threshold = math.ceil(k * CONSENSUS)
+    return count >= threshold
+
+def s_r_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """
+    s_r_dist(X) = sum_{i=0}^{k} P(TH_TTC_r < TTC_i <= TH_TTC_s) >= ceil(k * CONSENSUS)
+    where k = ceil(n * SR_DISTANCE_CONSENSUS)
+    """
+    k = math.ceil(N * SR_DISTANCE_CONSENSUS)
+    count = Sum([P(And(B_TTC[i] > TH_TTC_R, B_TTC[i] <= TH_TTC_S)) for i in range(k)])
+    threshold = math.ceil(k * CONSENSUS)
+    return count >= threshold
+
+def r_c_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """
+    r_c_dist(X) = sum_{i=0}^{k} P(TH_TTC_c < TTC_i <= TH_TTC_r) >= ceil(k * CONSENSUS)
+    where k = ceil(n * RC_DISTANCE_CONSENSUS)
+    """
+    k = math.ceil(N * RC_DISTANCE_CONSENSUS)
+    count = Sum([P(And(B_TTC[i] > TH_TTC_C, B_TTC[i] <= TH_TTC_R)) for i in range(k)])
+    threshold = math.ceil(k * CONSENSUS)
+    return count >= threshold
+
+def c_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """
+    c_dist(X) = sum_{i=0}^{k} P(TTC_i <= TH_TTC_c) >= ceil(k * CONSENSUS)
+    where k = ceil(n * C_DISTANCE_CONSENSUS)
+    """
+    k = math.ceil(N * C_DISTANCE_CONSENSUS)
+    count = Sum([P(B_TTC[i] <= TH_TTC_C) for i in range(k)])
+    threshold = math.ceil(k * CONSENSUS)
+    return count >= threshold
+
+def crossing(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """
+    crossing(X) = sum_{i=0}^{n-1} P(cs_i = 1) >= ceil(RT_H / (2 * CAM_FREQ))
+    """
+    count = Sum([P(B_cs[i] == 1) for i in range(N)])
     return count >= RT_HALF_FRAMES
 
-
-def valid_d(B_C, s_d):
-    """Z3 encoding of valid_d() predicate."""
-    return Or(detected(B_C), s_d < TH_D_STALE)
-
-
-def valid_c(B_cross, s_c):
-    """Z3 encoding of valid_c() predicate."""
-    return Or(crossing(B_cross), s_c < TH_C_STALE)
-
-
-def s_distance(B_TTC):
+def valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
     """
-    Symbolic safe distance check.
-    TTC_i > TH_TTC_s for at least CONSENSUS fraction of the first k frames.
+    valid_c(X) = crossing(X) ∨ s_c < TH_C_stale
     """
-    k = int(S_DISTANCE_CONSENSUS * N)
-    count = Sum([If(B_TTC[i] > TH_TTC_S, 1, 0) for i in range(k)])
-    threshold = k * CONSENSUS
-    return count >= threshold
+    return Or(crossing(B_C, B_TTC, B_cs, s_d, s_c, s_u, t), s_c < TH_C_STALE)
 
-
-def s_r_distance(B_TTC):
+def uncertain(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
     """
-    Check if distance is safe-to-risky.
-    TH_TTC_r < TTC_i <= TH_TTC_s for at least CONSENSUS fraction of the first k frames.
+    uncertain(X) = ¬s_dist(X) ∧ ¬s_r_dist(X) ∧ ¬r_c_dist(X) ∧ ¬c_dist(X)
     """
-    k = int(SR_DISTANCE_CONSENSUS * N)
-    count = Sum([If(And(B_TTC[i] > TH_TTC_R, B_TTC[i] <= TH_TTC_S), 1, 0) for i in range(k)])
-    threshold = k * CONSENSUS
-    return count >= threshold
-
-
-def r_c_distance(B_TTC):
-    """
-    Check if distance is risky-to-critical.
-    TH_TTC_c < TTC_i <= TH_TTC_r for at least CONSENSUS fraction of the first k frames.
-    """
-    k = int(RC_DISTANCE_CONSENSUS * N)
-    count = Sum([If(And(B_TTC[i] > TH_TTC_C, B_TTC[i] <= TH_TTC_R), 1, 0) for i in range(k)])
-    threshold = k * CONSENSUS
-    return count >= threshold
-
-
-def c_distance(B_TTC):
-    """
-    Check if distance is critical.
-    TTC_i <= TH_TTC_c for at least CONSENSUS fraction of the first k frames.
-    Note: The formal definition uses >= for the comparison, which seems inconsistent.
-    Using <= here as critical means TTC is at or below the critical threshold.
-    """
-    k = int(C_DISTANCE_CONSENSUS * N)
-    count = Sum([If(B_TTC[i] <= TH_TTC_C, 1, 0) for i in range(k)])
-    threshold = k * CONSENSUS
-    return count >= threshold
-
-
-def uncertain(B_TTC):
     return And(
-        Not(s_distance(B_TTC)),
-        Not(s_r_distance(B_TTC)),
-        Not(r_c_distance(B_TTC)),
-        Not(c_distance(B_TTC))
+        Not(s_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        Not(s_r_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        Not(r_c_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        Not(c_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t))
     )
 
+def valid_u(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """
+    valid_u(X) = uncertain(X) ∧ s_u < MAX_UNCERTAIN
+    """
+    return And(uncertain(B_C, B_TTC, B_cs, s_d, s_c, s_u, t), s_u < MAX_UNCERTAIN)
 
 # ============================================================================
-# GUARD CONDITIONS FOR EACH TRANSITION
+# INVARIANTS (Inv)
 # ============================================================================
-
-def get_guards(vars_dict):
+def invariant(q, B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
     """
-    Create Z3 expressions for all transition guards, matching the formal definition exactly.
+    Inv: Q → 2^X specifies conditions for staying in each state
+    with variable domain constraints.
     """
-    B_C = vars_dict['B_C']
-    B_TTC = vars_dict['B_TTC']
-    B_cross = vars_dict['B_cross']
-    s_d = vars_dict['s_d']
-    s_c = vars_dict['s_c']
-    s_u = vars_dict['s_u']
-    sns = vars_dict['sns']
-    t = vars_dict['t']
-    
-    # Compute predicates
-    det = detected(B_C)
-    cross = crossing(B_cross)
-    vd = valid_d(B_C, s_d)
-    vc = valid_c(B_cross, s_c)
-    sd = s_distance(B_TTC)
-    srd = s_r_distance(B_TTC)
-    rcd = r_c_distance(B_TTC)
-    cd = c_distance(B_TTC)
-    unc = uncertain(B_TTC)
-    
-    guards = {}
-    
-    # From NORMAL
-    guards['e1'] = Or(
-        And(Or(Not(vd), sd, unc), sns == 1, t == 0),
-        And(sns == 0, t >= CAMERA_FREQ)
-    )
-    guards['e2'] = And(vd, Not(vc), srd, sns == 1, t == 0)
-    guards['e3'] = And(
-        vd,
-        Or(And(Not(vc), rcd), And(vc, srd)),
-        sns == 1, t == 0
-    )
-    guards['e4'] = And(vd, Not(vc), cd, sns == 1, t == 0)
-    guards['e5'] = And(vd, vc, rcd, sns == 1, t == 0)
-    guards['e6'] = And(vd, vc, cd, sns == 1, t == 0)
-    
-    # From SAFE_WARNING
-    guards['e7'] = And(
-        Or(Not(vd), sd, s_u >= MAX_UNCERTAIN),
-        sns == 1, t == 0
-    )
-    guards['e8'] = Or(
-        And(
-            Or(And(vd, Not(vc), srd), And(unc, s_u < MAX_UNCERTAIN)),
-            sns == 1, t == 0
-        ),
-        And(sns == 0, t >= CAMERA_FREQ)
-    )
-    guards['e9'] = guards['e3']
-    guards['e10'] = guards['e4']
-    guards['e11'] = guards['e5']
-    guards['e12'] = guards['e6']
-    
-    # From THROTTLING
-    guards['e13'] = guards['e7']
-    guards['e14'] = guards['e2']
-    guards['e15'] = Or(
-        And(
-            vd,
-            Or(
-                And(Not(vc), rcd),
-                And(vc, srd),
-                And(unc, s_u < MAX_UNCERTAIN)
-            ),
-            sns == 1, t == 0
-        ),
-        And(sns == 0, t >= CAMERA_FREQ)
-    )
-    guards['e16'] = guards['e4']
-    guards['e17'] = guards['e5']
-    guards['e18'] = guards['e6']
-    
-    # From CRITICAL_SLOWDOWN
-    guards['e19'] = And(
-        Or(Not(vd), sd, s_u >= MAX_UNCERTAIN),
-        sns == 1, t == 0
-    )
-    guards['e20'] = guards['e2']
-    guards['e21'] = guards['e3']
-    guards['e22'] = Or(
+        
+    # --- Existing invariant logic ---
+    state_invariant = If(
+        q == Normal,
         And(
             Or(
-                And(vd, Not(vc), cd),
-                And(vd, unc, s_u < MAX_UNCERTAIN)
+                Not(valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+                s_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+                uncertain(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)
             ),
-            sns == 1, t == 0
+            t < CAMERA_FREQ
         ),
-        And(sns == 0, t >= CAMERA_FREQ)
-    )
-    guards['e23'] = guards['e5']
-    guards['e24'] = guards['e6']
-    
-    # From SOFT_BRAKING
-    guards['e25'] = And(Or(Not(vd), Not(vc), sd, s_u >= MAX_UNCERTAIN), sns == 1, t == 0)
-    guards['e26'] = And(vd, vc, srd, sns == 1, t == 0)
-    guards['e27'] = Or(And(vd, vc, Or(rcd, And(unc, s_u < MAX_UNCERTAIN)), sns == 1, t == 0), And(sns == 0, t >= CAMERA_FREQ))
-    guards['e28'] = guards['e6']
-    
-    # From EMERGENCY_BRAKING
-    guards['e29'] = And(Or(Not(vd), Not(vc)), sns == 1, t == 0)
-    guards['e30'] = Or(And(vc, sns == 1, t == 0), And(sns == 0, t >= CAMERA_FREQ))
-    
-    return guards
-
-
-# ============================================================================
-# TRANSITION GROUPS BY STATE
-# ============================================================================
-
-# Mapping of states to their outgoing transitions
-STATE_TRANSITIONS = {
-    'NORMAL': ['e1', 'e2', 'e3', 'e4', 'e5', 'e6'],
-    'SAFE_WARNING': ['e7', 'e8', 'e9', 'e10', 'e11', 'e12'],
-    'THROTTLING': ['e13', 'e14', 'e15', 'e16', 'e17', 'e18'],
-    'CRITICAL_SLOWDOWN': ['e19', 'e20', 'e21', 'e22', 'e23', 'e24'],
-    'SOFT_BRAKING': ['e25', 'e26', 'e27', 'e28'],
-    'EMERGENCY_BRAKING': ['e29', 'e30']
-}
-
-
-# ============================================================================
-# INVARIANTS
-# ============================================================================
-
-def get_invariants(vars_dict):
-    """
-    Return the invariant conditions for each discrete state.
-    """
-    B_C = vars_dict['B_C']
-    B_TTC = vars_dict['B_TTC']
-    B_cross = vars_dict['B_cross']
-    s_d = vars_dict['s_d']
-    s_c = vars_dict['s_c']
-    s_u = vars_dict['s_u']
-    
-    vd = valid_d(B_C, s_d)
-    vc = valid_c(B_cross, s_c)
-    sd = s_distance(B_TTC)
-    srd = s_r_distance(B_TTC)
-    rcd = r_c_distance(B_TTC)
-    cd = c_distance(B_TTC)
-    unc = uncertain(B_TTC)
-    
-    invariants = {}
-    
-    invariants['NORMAL'] = Or(Not(vd), sd, unc)
-    
-    invariants['SAFE_WARNING'] = Or(
-        And(vd, Not(vc), srd),
-        And(unc, s_u < MAX_UNCERTAIN)
-    )
-    
-    invariants['THROTTLING'] = And(
-        vd,
-        Or(
-            And(Not(vc), rcd),
-            And(vc, srd),
-            And(unc, s_u < MAX_UNCERTAIN)
+        If(
+            q == SafeWarning,
+            And(
+                Or(
+                    And(
+                        valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+                        Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+                    ),
+                    valid_u(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)
+                ),
+                t < CAMERA_FREQ
+            ),
+            If(
+                q == Throttling,
+                And(
+                    valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+                    valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+                    Or(
+                        s_r_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+                        valid_u(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)
+                    ),
+                    t < CAMERA_FREQ
+                ),
+                If(
+                    q == SoftBraking,
+                    And(
+                        valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+                        valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+                        Or(
+                            r_c_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+                            valid_u(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)
+                        ),
+                        t < CAMERA_FREQ
+                    ),
+                    If(
+                        q == EmergencyBraking,
+                        And(
+                            valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+                            t < CAMERA_FREQ
+                        ),
+                        False  # Invalid state
+                    )
+                )
+            )
         )
     )
+
+    # --- Combine domain + state invariant ---
+    return state_invariant
+
+# ============================================================================
+# GUARDS (G: E → 2^X)
+# ============================================================================
+
+# Common guard conditions
+def G_sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """Guard for sensing transitions (t >= CAM_FREQ)"""
+    return t >= CAMERA_FREQ
+
+def G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """Guard for transitions to Normal"""
+    return And(
+        Or(
+            Not(valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+            s_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+            Not(valid_u(B_C, B_TTC, B_cs, s_d, s_c, s_u, t))
+        ),
+        t < CAMERA_FREQ
+    )
+
+def G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """Guard for transitions to SafeWarning"""
+    return And(
+        valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+        Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        t < CAMERA_FREQ
+    )
+
+def G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """Guard for transitions to Throttling"""
+    return And(
+        valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+        valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+        s_r_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+        t < CAMERA_FREQ
+    )
+
+def G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """Guard for transitions to SoftBraking"""
+    return And(
+        valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+        valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+        r_c_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+        t < CAMERA_FREQ
+    )
+
+def G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """Guard for transitions to EmergencyBraking"""
+    return And(
+        valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+        valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+        c_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+        t < CAMERA_FREQ
+    )
+
+def G_from_emergency(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """Guard for transitions from EmergencyBraking"""
+    return Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t))
+
+# ============================================================================
+# RESETS (R: E × X → 2^X)
+# ============================================================================
+
+def sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
+          B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
+          C_new, TTC_new, cs_new):
+    """
+    sense(X) shifts buffer and adds new sensor values:
+        t' = 0, C_i' = C_{i-1}, TTC_i' = TTC_{i-1}, cs_i' = cs_{i-1}
+        C_0' = C_new, TTC_0' = TTC_new, cs_0' = cs_new
+    """
+    constraints = [t_next == 0]
     
-    invariants['CRITICAL_SLOWDOWN'] = Or(
-        And(vd, Not(vc), cd),
-        And(vd, unc, s_u < MAX_UNCERTAIN)
+    # Shift buffer: element i gets value from element i-1
+    for i in range(1, N):
+        constraints.append(B_C_next[i] == B_C[i-1])
+        constraints.append(B_TTC_next[i] == B_TTC[i-1])
+        constraints.append(B_cs_next[i] == B_cs[i-1])
+    
+    # New sensor values at position 0
+    constraints.append(B_C_next[0] == C_new)
+    constraints.append(B_TTC_next[0] == TTC_new)
+    constraints.append(B_cs_next[0] == cs_new)
+    
+    # Sensor constraints
+    constraints.append(And(C_new >= 0, C_new <= 1))
+    constraints.append(Or(
+        TTC_new == NO_TTC,
+        TTC_new > 0
+    ))
+    constraints.append(Or(cs_new == 0, cs_new == 1))
+    constraints.append(Implies(C_new < TH_C, And(TTC_new == NO_TTC, cs_new == 0)))
+    
+    # Staleness timers remain unchanged
+    constraints.extend([
+        s_d_next == s_d,
+        s_c_next == s_c,
+        s_u_next == s_u
+    ])
+    
+    return And(constraints)
+
+def reset_timers(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
+                 B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next):
+    """
+    reset(X) resets staleness timers based on current state:
+        s_d' = 0 if detected(X) else s_d
+        s_c' = 0 if crossing(X) else s_c
+        s_u' = 0 if uncertain(X) else s_u
+    """
+    constraints = []
+    
+    # Buffers remain unchanged
+    for i in range(N):
+        constraints.append(B_C_next[i] == B_C[i])
+        constraints.append(B_TTC_next[i] == B_TTC[i])
+        constraints.append(B_cs_next[i] == B_cs[i])
+    
+    # Time remains unchanged
+    constraints.append(t_next == t)
+    
+    # Reset staleness timers conditionally
+    constraints.append(
+        If(detected(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+           s_d_next == 0,
+           s_d_next == s_d)
+    )
+    constraints.append(
+        If(crossing(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+           s_c_next == 0,
+           s_c_next == s_c)
+    )
+    constraints.append(
+        If(uncertain(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
+           s_u_next == 0,
+           s_u_next == s_u)
     )
     
-    invariants['SOFT_BRAKING'] = Or(
-        And(vd, vc, rcd),
-        And(vd, vc, unc, s_u < MAX_UNCERTAIN)
+    return And(constraints)
+
+def reset_h(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
+            B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
+            C_new, TTC_new, cs_new):
+    """
+    h(X) = sense(X) if t >= CAM_FREQ, else reset(X)
+    """
+    return If(
+        t >= CAMERA_FREQ,
+        sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
+              B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
+              C_new, TTC_new, cs_new),
+        reset_timers(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
+                     B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next)
+    )
+
+# ============================================================================
+# TRANSITION RELATION
+# ============================================================================
+
+def transition(q, q_next, B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
+    """
+    Encodes all edges E and their guards G with reset R
+    """
+    # Reset is the same for all edges
+    # reset_constraint = reset_h(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
+    #                             B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
+    #                             C_new, TTC_new, cs_new)
+    
+    # Encode all edges with their guards
+    transition_cases = Or(
+        # From Normal (e1-e5)
+        And(q == Normal, q_next == Normal, G_sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == Normal, q_next == SafeWarning, G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == Normal, q_next == Throttling, G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == Normal, q_next == SoftBraking, G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == Normal, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        
+        # From SafeWarning (e6-e10)
+        And(q == SafeWarning, q_next == Normal, G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == SafeWarning, q_next == SafeWarning, G_sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == SafeWarning, q_next == Throttling, G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == SafeWarning, q_next == SoftBraking, G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == SafeWarning, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        
+        # From Throttling (e11-e15)
+        And(q == Throttling, q_next == Normal, G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == Throttling, q_next == SafeWarning, G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == Throttling, q_next == Throttling, G_sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == Throttling, q_next == SoftBraking, G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == Throttling, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        
+        # From SoftBraking (e16-e20)
+        And(q == SoftBraking, q_next == Normal, G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == SoftBraking, q_next == SafeWarning, G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == SoftBraking, q_next == Throttling, G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == SoftBraking, q_next == SoftBraking, G_sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == SoftBraking, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        
+        # From EmergencyBraking (e21-e22)
+        And(q == EmergencyBraking, q_next == Normal, G_from_emergency(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)),
+        And(q == EmergencyBraking, q_next == EmergencyBraking, G_sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t))
     )
     
-    invariants['EMERGENCY_BRAKING'] = vc
-    
-    return invariants
+    return transition_cases
