@@ -73,7 +73,8 @@ def detected(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
     """
     detected(X) = sum_{i=0}^{n-1} P(C_i >= TH_C) >= ceil(RT_H / (2 * CAM_FREQ))
     """
-    count = Sum([P(B_C[i] >= TH_C) for i in range(N)])
+    limit = int(min(N, RT_WINDOW_FRAMES))
+    count = Sum([P(B_C[i] >= TH_C) for i in range(limit)])
     return count >= RT_HALF_FRAMES
 
 def valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
@@ -119,14 +120,15 @@ def c_dist(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
     """
     k = math.ceil(N * C_DISTANCE_CONSENSUS)
     count = Sum([P(B_TTC[i] <= TH_TTC_C) for i in range(k)])
-    threshold = math.ceil(k * CONSENSUS)
-    return count >= threshold
+   # threshold = math.ceil(k * CONSENSUS)
+    return count >= k
 
 def crossing(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
     """
     crossing(X) = sum_{i=0}^{n-1} P(cs_i = 1) >= ceil(RT_H / (2 * CAM_FREQ))
     """
-    count = Sum([P(B_cs[i] == 1) for i in range(N)])
+    limit = int(min(N, RT_WINDOW_FRAMES))
+    count = Sum([P(B_cs[i] == 1) for i in range(limit)])
     return count >= RT_HALF_FRAMES
 
 def valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
@@ -281,6 +283,7 @@ def G_from_emergency(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
     """Guard for transitions from EmergencyBraking"""
     return Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t))
 
+
 # ============================================================================
 # RESETS (R: E × X → 2^X)
 # ============================================================================
@@ -341,41 +344,41 @@ def reset_timers(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
         constraints.append(B_cs_next[i] == B_cs[i])
     
     # Time remains unchanged
-    constraints.append(t_next == t)
+    constraints.append(t_next == t + CAMERA_FREQ)
     
     # Reset staleness timers conditionally
     constraints.append(
         If(detected(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
            s_d_next == 0,
-           s_d_next == s_d)
+           s_d_next == s_d + CAMERA_FREQ)
     )
     constraints.append(
         If(crossing(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
            s_c_next == 0,
-           s_c_next == s_c)
+           s_c_next == s_c + CAMERA_FREQ)
     )
     constraints.append(
         If(uncertain(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
            s_u_next == 0,
-           s_u_next == s_u)
+           s_u_next == s_u + CAMERA_FREQ)
     )
     
     return And(constraints)
 
-def reset_h(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
-            B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
-            C_new, TTC_new, cs_new):
-    """
-    h(X) = sense(X) if t >= CAM_FREQ, else reset(X)
-    """
-    return If(
-        t >= CAMERA_FREQ,
-        sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
-              B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
-              C_new, TTC_new, cs_new),
-        reset_timers(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
-                     B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next)
-    )
+# def reset_h(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
+#             B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
+#             C_new, TTC_new, cs_new):
+#     """
+#     h(X) = sense(X) if t >= CAM_FREQ, else reset(X)
+#     """
+#     return If(
+#         t >= CAMERA_FREQ,
+#         sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
+#               B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
+#               C_new, TTC_new, cs_new),
+#         reset_timers(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
+#                      B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next)
+#     )
 
 # ============================================================================
 # TRANSITION RELATION

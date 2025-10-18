@@ -150,7 +150,8 @@ class PedestrianProtectionAutomaton:
             return True
         k = math.ceil(S_DISTANCE_CONSENSUS * N)
         count = sum(1 for i in range(k) if self.B_TTC[i] > TH_TTC_S)
-        return count >= k * CONSENSUS
+        threshold = math.ceil(CONSENSUS * k)
+        return count >= threshold
     
     def _s_r_distance(self) -> bool:
         """Check if distance is safe-to-risky (Z3-matching implementation)"""
@@ -158,7 +159,8 @@ class PedestrianProtectionAutomaton:
             return False
         k = math.ceil(SR_DISTANCE_CONSENSUS * N)
         count = sum(1 for i in range(k) if TH_TTC_R < self.B_TTC[i] <= TH_TTC_S)
-        return count >= CONSENSUS * k
+        threshold = math.ceil(CONSENSUS * k)
+        return count >= threshold
     
     def _r_c_distance(self) -> bool:
         """Check if distance is risky-to-critical"""
@@ -166,7 +168,8 @@ class PedestrianProtectionAutomaton:
             return False
         k = math.ceil(RC_DISTANCE_CONSENSUS * N)
         count = sum(1 for i in range(k) if TH_TTC_C < self.B_TTC[i] <= TH_TTC_R)
-        return count >= CONSENSUS * k
+        threshold = math.ceil(CONSENSUS * k)
+        return count >= threshold
     
     def _c_distance(self) -> bool:
         """Check if distance is critical"""
@@ -264,7 +267,7 @@ class PedestrianProtectionAutomaton:
                 return State.SOFT_BRAKING, Action.BRAKE
             # e12: To EmergencyBraking
             #if valid_d and valid_c and c_dist:
-            if G_to_soft_braking:
+            if G_to_emergency_braking:
                 return State.EMERGENCY_BRAKING, Action.STOP
         
         elif self.state == State.THROTTLING:
