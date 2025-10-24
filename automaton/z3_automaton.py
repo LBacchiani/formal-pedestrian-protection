@@ -211,6 +211,7 @@ def invariant(q, B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
                     If(
                         q == EmergencyBraking,
                         And(
+                            valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
                             valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t),
                             t < CAMERA_FREQ
                         ),
@@ -281,7 +282,7 @@ def G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
 
 def G_from_emergency(B_C, B_TTC, B_cs, s_d, s_c, s_u, t):
     """Guard for transitions from EmergencyBraking"""
-    return Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t))
+    return Not(And(valid_c(B_C, B_TTC, B_cs, s_d, s_c, s_u, t), valid_d(B_C, B_TTC, B_cs, s_d, s_c, s_u, t)))
 
 
 # ============================================================================
