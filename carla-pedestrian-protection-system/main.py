@@ -2,10 +2,6 @@ import carla
 import cv2
 import numpy as np
 import pygame
-from ultralytics import YOLO
-from enum import Enum
-from dataclasses import dataclass
-from typing import List, Tuple, Optional
 import random
 import time
 import threading
@@ -18,7 +14,11 @@ import uuid
 import os
 import signal
 import sys
-
+from enum import Enum
+from ultralytics import YOLO
+from dataclasses import dataclass
+from typing import List
+from utils import smooth_increase, max_yaw_allowed, pixel_to_angle, get_distance_to_pedestrian_centroid
 
 @dataclass
 class Pedestrian:
@@ -46,7 +46,7 @@ CAMERA_WIDTH = 1080
 CAMERA_HEIGHT = 720
 VIEW_FOV = 80
 
-METRICS_PATH = "metrics_log.jsonl"   # file append-only
+METRICS_PATH = "metrics_log.jsonl" 
 RUN_ID = str(uuid.uuid4())
 RUN_START_TS = time.time()
 
@@ -71,7 +71,6 @@ mqtt_lock = threading.Lock()
 if not os.path.exists(METRICS_PATH):
     with open(METRICS_PATH, "w", encoding="utf-8") as f:
         f.write("")  # crea file vuoto se non esiste
-
 try:
     mqtt_client.connect(BROKER, PORT, 60)
     mqtt_client.loop_start()
@@ -88,29 +87,12 @@ def on_mqtt_message(client, userdata, msg):
     except queue.Full:
         print("[MQTT] Warning: queue full, message dropped")
 
-def smooth_increase(level_brk, level_intensity, rate, speed):
-    # Normalizziamo la velocità tra 0 e 1 rispetto a un valore massimo (es. 50 km/h)
-    max_speed = 50.0
-    speed_factor = min(speed / max_speed, 1.0)
-
-    # Più la velocità è alta, più il rate di crescita aumenta leggermente
-    delta = rate * (level_intensity ** 2) * (0.5 + speed_factor * 1.5)
-
-    # Aggiorniamo il livello di frenata
-    level_brk += delta
-
-    # Limite massimo dipendente anche dalla velocità (più veloce → più freno ammesso)
-    max_brk = 0.15 + 0.25 * speed_factor  # tra 0.15 e 0.4
-
-    return min(level_brk, max_brk)
-
 def mqtt_processor():
-    """Thread separato che elabora i messaggi MQTT ricevuti."""
     global current_action, mqtt_last_update, level_brk, level_intensity, velocity
 
     while True:
         try:
-            payload_raw = mqtt_queue.get()  # blocca finché c'è un messaggio
+            payload_raw = mqtt_queue.get()
             payload = json.loads(payload_raw.decode())
 
             action = payload.get("action", "").lower()
@@ -141,15 +123,9 @@ def mqtt_processor():
 
 mqtt_client.on_message = on_mqtt_message
 mqtt_client.subscribe(TOPIC_REC)
-
-# Avvia il thread che consuma la coda MQTT
 processor_thread = threading.Thread(target=mqtt_processor, daemon=True)
 processor_thread.start()
-
-
 model = YOLO("yolov8n.pt")
-
-
 cv2.namedWindow('RGB image', cv2.WINDOW_NORMAL)
 cv2.namedWindow('Depth image', cv2.WINDOW_NORMAL)
 
@@ -160,30 +136,27 @@ spectator = world.get_spectator()
 
 PEDESTRIAN = "DET"  # DET || "RANDOM"  
 
-### Modalità Sole ### 
 weather = carla.WeatherParameters(
     cloudiness=0.0
 )
 
-### Modalità notte ###
 # weather = carla.WeatherParameters(
-#     cloudiness=90.0,         # cielo molto coperto
-#     precipitation=0.0,      # pioggia
-#     precipitation_deposits=0.0, # pozzanghere
-#     wind_intensity=0.0,        #vento 
-#     sun_altitude_angle=-20.0, # sotto l'orizzonte = notte
-#     fog_density=0.0,        # densità nebbia (0–100)
+#     cloudiness=90.0,         # very cloudy sky
+#     precipitation=0.0,       # rain
+#     precipitation_deposits=0.0, # puddles
+#     wind_intensity=0.0,      # wind
+#     sun_altitude_angle=-20.0, # below horizon = night
+#     fog_density=0.0,         # fog density (0–100)
 # )
-### Modalità Notte con nebbia###
 # weather = carla.WeatherParameters(
-#     cloudiness=90.0,         # cielo molto coperto
-#     precipitation=80.0,      # pioggia forte
-#     precipitation_deposits=80.0, # pozzanghere
-#     wind_intensity=60.0,     # vento medio-forte
-#     sun_altitude_angle=-20.0, # sotto l'orizzonte = notte
-#     fog_density=70.0,        # densità nebbia (0–100)
-#     fog_distance=20.0,       # visibilità max in metri
-#     fog_falloff=1.5          # quanto la nebbia si intensifica con la distanza
+#     cloudiness=90.0,         # very cloudy sky
+#     precipitation=80.0,      # heavy rain
+#     precipitation_deposits=80.0, # puddles
+#     wind_intensity=60.0,     # medium-strong wind
+#     sun_altitude_angle=-20.0, # below horizon = night
+#     fog_density=70.0,        # fog density (0–100)
+#     fog_distance=20.0,       # max visibility in meters
+#     fog_falloff=1.5          # how much fog intensifies with distance
 # )
 
 # world.set_weather(weather)
@@ -208,8 +181,8 @@ metrics = {
     },
     "collisions": {
         "count": 0,
-        "binary": 0,          # 1 se almeno una collisione
-        "events": []          # lista dettagli per contatto
+        "binary": 0,          
+        "events": []         
     },
     "d_min_records": []
 }
@@ -234,7 +207,6 @@ input_depth_image_lock = threading.Lock()
 processed_output = None
 processed_output_lock = threading.Lock()
 
-
 def remove_all(world: carla.World):
     for a in world.get_actors().filter('vehicle.*'):
         a.destroy()
@@ -244,55 +216,6 @@ def remove_all(world: carla.World):
         a.destroy()
     for a in world.get_actors().filter('controller.ai.walker'):
         a.destroy()
-
-
-def carla_transform_to_matrix(transform: carla.Transform) -> np.ndarray:
-    r = transform.rotation
-    t = transform.location
-
-    cy = math.cos(math.radians(r.yaw))
-    sy = math.sin(math.radians(r.yaw))
-    cp = math.cos(math.radians(r.pitch))
-    sp = math.sin(math.radians(r.pitch))
-    cr = math.cos(math.radians(r.roll))
-    sr = math.sin(math.radians(r.roll))
-
-    # R = Rz(yaw) * Ry(pitch) * Rx(roll)
-    R = np.array([
-        [cp*cy, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
-        [cp*sy, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
-        [  -sp,            cp*sr,            cp*cr]
-    ])
-    M = np.eye(4)
-    M[0:3, 0:3] = R
-    M[0:3, 3] = np.array([t.x, t.y, t.z])
-    return M
-
-
-def world_to_pixel(
-    loc_world: carla.Location,
-    camera: carla.Sensor,
-    K: np.ndarray
-) -> Optional[Tuple[int, int]]:
-    M_cam = carla_transform_to_matrix(camera.get_transform())
-    world2cam = np.linalg.inv(M_cam)
-
-    p_world = np.array([loc_world.x, loc_world.y, loc_world.z, 1.0])
-    p_cam = world2cam @ p_world
-
-    X, Y, Z = p_cam[0], p_cam[1], p_cam[2]
-    if X <= 0:
-        return None
-
-    fx, fy = K[0, 0], K[1, 1]
-    cx, cy = K[0, 2], K[1, 2]
-
-    u = cx + fx * (Y / X)
-    v = cy - fy * (Z / X)
-
-    if 0 <= u < CAMERA_WIDTH and 0 <= v < CAMERA_HEIGHT:
-        return int(u), int(v)
-    return None
 
 def setup_camera(car: carla.Vehicle):
     camera_transform = carla.Transform(carla.Location(x=1.2, y=0, z=1.4), carla.Rotation(pitch=-5.0))
@@ -322,7 +245,6 @@ def setup_camera(car: carla.Vehicle):
 
     return rgb_camera, depth_camera
 
-
 def spawn_walker(world: carla.World):
     blueprint_library = world.get_blueprint_library()
 
@@ -342,7 +264,6 @@ def spawn_walker(world: carla.World):
     else:
         speed = 1.0
 
-    # spawn casuale
     spawn_points = world.get_map().get_spawn_points()
     if not spawn_points:
         return None, None
@@ -352,8 +273,6 @@ def spawn_walker(world: carla.World):
     if walker is None:
         return None, None
 
-
-    # aggiungi controller AI
     controller_bp = blueprint_library.find('controller.ai.walker')
     controller = world.try_spawn_actor(controller_bp, carla.Transform(), walker)
     if controller:
@@ -385,11 +304,9 @@ def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist
 
     walker_bp = random.choice(walker_blueprints)
 
-    # --- disattiva invincibilità prima dello spawn ---
     if walker_bp.has_attribute("is_invincible"):
         walker_bp.set_attribute("is_invincible", "false")
 
-    # --- imposta velocità casuale ---
     if walker_bp.has_attribute("speed"):
         speed = random.uniform(1.0, 1.6)
         walker_bp.set_attribute('speed', str(speed))
@@ -399,7 +316,6 @@ def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist
     spawn_points = world.get_map().get_spawn_points()
     if not spawn_points:
         return None, None, existing_positions
-
 
     random.shuffle(spawn_points)
     start_point = None
@@ -412,14 +328,13 @@ def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist
     if start_point is None:
         return None, None, existing_positions
 
-    # Trova il punto più lontano tra quelli non troppo vicini
     def distance(a, b):
         return a.location.distance(b.location)
 
     far_points = sorted(spawn_points, key=lambda p: distance(p, start_point), reverse=True)
     farthest_point = None
     for fp in far_points:
-        if fp.location.distance(start_point.location) > 20.0:  # almeno 20m di cammino
+        if fp.location.distance(start_point.location) > 20.0:  # at least 20 meters away
             farthest_point = fp
             break
 
@@ -439,8 +354,6 @@ def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist
 
         def walk_to_farthest():
             destination = farthest_point.location
-
-            # Piccola deviazione casuale per evitare traiettorie perfettamente allineate
             offset = carla.Location(
                 x=random.uniform(-2.0, 2.0),
                 y=random.uniform(-2.0, 2.0),
@@ -459,9 +372,7 @@ def spawn_walker_det(world: carla.World, existing_positions=None, min_spawn_dist
                 time.sleep(1.0)
 
         threading.Thread(target=walk_to_farthest, daemon=True).start()
-
     return walker, controller, existing_positions
-
 
 def detect_pedestrians(image):
     device = 'cuda' 
@@ -481,41 +392,6 @@ def detect_pedestrians(image):
                 detections.append((confs[i], bbox, centroid))
     return detections
 
-def get_distance_to_pedestrian_centroid(centroid, depth_image):
-    x, y = centroid
-
-    blue  = depth_image[y, x, 0]
-    green = depth_image[y, x, 1]
-    red   = depth_image[y, x, 2]
-
-    normalized_depth = (red + green * 256 + blue * 256**2) / (256**3 - 1)
-
-    depth_in_meters = normalized_depth * 1000.0
-
-    return depth_in_meters
-
-def pixel_to_angle(u: int, v: int, K: np.ndarray) -> Tuple[float, float]:
-    """
-    Converte un pixel immagine (u,v) in angolo orizzontale (yaw) e verticale (pitch)
-    rispetto all'asse ottico della camera.
-    """
-    fx, fy = K[0, 0], K[1, 1]
-    cx, cy = K[0, 2], K[1, 2]
-
-    # normalizzazione pixel
-    x = (u - cx) / fx
-    y = (v - cy) / fy
-
-    # direzione nel frame camera (z forward)
-    vec = np.array([1.0, x, -y])  
-    vec /= np.linalg.norm(vec)     # normalizza
-
-    # angoli rispetto all'asse z (forward)
-    yaw = math.atan2(vec[1], vec[0])    # deviazione orizzontale
-    pitch = math.atan2(vec[2], vec[0])  # deviazione verticale
-
-    return yaw, pitch
-
 def send_mqtt_async(payload: dict):
     def _send():
         try:
@@ -523,21 +399,6 @@ def send_mqtt_async(payload: dict):
         except Exception as e:
             print("[MQTT] Publish failed:", e)
     threading.Thread(target=_send, daemon=True).start()
-
-
-def max_yaw_allowed(distance):
-    """
-    Restituisce l'angolo massimo (in gradi) che consideriamo crossing.
-    - 0 m  → +-37°
-    - 25 m → +-0° (oltre nessun crossing)
-    """
-    if distance <= 0:
-        return 37.0
-    elif distance >= 30.0:
-        return 0.0
-    else:
-        # Interpolazione lineare da 37° (0 m) → 0° (30 m)
-        return 37.0 * (1 - distance / 30.0)
 
 def get_current_action():
     with mqtt_lock:
@@ -550,11 +411,7 @@ def process_image():
     target_dt = 0.105  # 10Hz
     crossing = 0
 
-    print("[PROCESS] Avviato thread di elaborazione immagini...")
-
     while True:
-        
-        # acquisizione immagini
         with input_rgb_image_lock:
             rgb_image = input_rgb_image
         with input_depth_image_lock:
@@ -569,23 +426,18 @@ def process_image():
             continue
         last_inference_time = now
 
-        # conversione zero-copy
         rgb_array = np.frombuffer(rgb_image.raw_data, dtype=np.uint8)
         rgb_array = rgb_array.reshape((rgb_image.height, rgb_image.width, 4))[:, :, :3]
 
         depth_array = np.frombuffer(depth_image.raw_data, dtype=np.uint8)
         depth_array = depth_array.reshape((depth_image.height, depth_image.width, 4))
 
-
-        # velocità veicolo
         vehicle_speed = vehicle.get_velocity()
         velocity = math.sqrt(vehicle_speed.x**2 + vehicle_speed.y**2 + vehicle_speed.z**2)
 
-        # detection pedoni (YOLO)
         detections = detect_pedestrians(rgb_array)
         detected_pedestrians: List[Pedestrian] = []
 
-        # elaborazione pedoni
         for conf, _, centroid in detections:
             distance = get_distance_to_pedestrian_centroid(centroid, depth_array)
             yaw, pitch = pixel_to_angle(centroid[0], centroid[1], rgb_camera.calibration)
@@ -603,39 +455,23 @@ def process_image():
             ))
 
         local_action = get_current_action()
-
-        # trova pedone più vicino
         closest_ped = min(detected_pedestrians, key=lambda p: p.distance) if detected_pedestrians else None
-
-        # confidenza del pedone più vicino
         conf = closest_ped.confidence if closest_ped else 0.0
 
-        # angoli e TTC del più vicino
         if closest_ped:
             yaw_rad = closest_ped.yaw
             ttc_camera = closest_ped.time_to_collision
 
-            # sterzo veicolo
             steer_norm = vehicle.get_control().steer  # [-1,+1]
-            steer_angle_deg = steer_norm * 35.0       # ±35° (asse ruote)
+            steer_angle_deg = steer_norm * 35.0       # +-35° max steering angle
 
-            # angolo orizzontale del pedone nel frame camera
             yaw_deg = math.degrees(yaw_rad) 
-
-            # deviazione rispetto all'asse ruote
             relative_yaw = yaw_deg - steer_angle_deg
-
-            # ampiezza del cono visivo in base alla distanza
             threshold = max_yaw_allowed(closest_ped.distance)
-            
-
-            # crossing: pedone entro il cono centrato sulle ruote
             crossing = 1 if abs(relative_yaw) <= threshold else 0
-
         else:
             yaw, pitch, ttc_camera, crossing = None, None, None, 0
             
-        # prepara payload
         payload = {
             "timestamp": now,
             "vehicle_speed": velocity,
@@ -651,26 +487,21 @@ def process_image():
 
         closest_distance = closest_ped.distance if closest_ped else None
 
-        # --- se siamo in stato di frenata ---
         if local_action in ("brake", "emergency_brake") and closest_distance:
-            # marcare che è iniziato un episodio di frenata
             if not is_braking_active:
                 is_braking_active = True
                 d_min_current = float('inf')
                 brake_start_loc = vehicle.get_location()
                 speed_before_brake = velocity
 
-            # aggiorna la distanza minima raggiunta durante la frenata
             if closest_distance < d_min_current:
                 d_min_current = closest_distance
                 d_min_action = local_action
 
-        # --- se la frenata è terminata ---
         elif is_braking_active and local_action not in ("brake", "emergency_brake"):
             stop_loc = vehicle.get_location()
             stopping_distance = brake_start_loc.distance(stop_loc) if brake_start_loc and stop_loc else None
 
-            # salva record
             d_min_records.append({
                 "timestamp": time.time(),
                 "action": d_min_action if d_min_action else "unknown",
@@ -678,26 +509,12 @@ def process_image():
                 "stopping_distance": stopping_distance if stopping_distance else None,
                 "speed_before_brake": speed_before_brake if speed_before_brake else None
             })
-            # reset
             is_braking_active = False
             d_min_current = float('inf')
             brake_start_loc = None
             stopping_distance = None
             speed_before_brake = 0.0
 
-
-
-        # stampa di debug
-        # print("[SUMMARY]",
-        #       f"speed={velocity:.2f} m/s",
-        #       f"confidence={payload['confidence']:.2f}",
-        #       f"dist={payload['camera_distance']:.1f}m" if payload['camera_distance'] else "dist=None",
-        #       f"yaw={payload['camera_yaw_deg']:.1f}°" if payload['camera_yaw_deg'] else "yaw=None",
-        #       f"ttc={payload['ttc']:.2f}" if payload['ttc'] else "ttc=None",
-        #       f"is_crossing={payload['is_crossing']}"
-        # )
-
-        # salva per rendering
         with processed_output_lock:
             processed_output = {
                 "rgb_image": rgb_array,
@@ -770,8 +587,6 @@ class GameLoop(object):
                 with mqtt_lock:
                     local_action = current_action
                     local_level_brk = level_brk
-                    # local_last_update = mqtt_last_update
-
 
                 try:
                     ready = False
@@ -786,13 +601,11 @@ class GameLoop(object):
                             ready = True
 
                     if ready:
-                        # RGB: da RGB (CARLA) a BGR (OpenCV)
                         if rgb_arr is not None and rgb_arr.ndim == 3 and rgb_arr.shape[2] >= 3:
                             bgr_for_display = cv2.cvtColor(rgb_arr[:, :, :3], cv2.COLOR_RGB2BGR)
                         else:
                             bgr_for_display = None
 
-                        # DEPTH: converti da codifica CARLA a visuale colorata
                         if depth_arr is not None and depth_arr.ndim == 3 and depth_arr.shape[2] >= 4:
                             rgb = depth_arr[:, :, :3].astype(np.uint32)
                             r = rgb[:, :, 2]
@@ -803,27 +616,22 @@ class GameLoop(object):
                             depth_vis = (255 * (1.0 - depth_m / 50.0)).astype(np.uint8)
                             depth_for_display = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
 
-                            # Aggiungi legenda laterale (color bar) 
-                            h, w, _ = depth_for_display.shape
+                            h, _, _ = depth_for_display.shape
                             legend_h = h
                             legend_w = 40
                             legend = np.linspace(255, 0, legend_h).astype(np.uint8)
                             legend = cv2.applyColorMap(legend.reshape(-1, 1), cv2.COLORMAP_JET)
                             legend = cv2.resize(legend, (legend_w, legend_h))
 
-                            # Testo scala metri
-                            step = legend_h // 5
-                            for i, dist in enumerate([0, 10, 20, 30, 40, 50]):
+                            for _, dist in enumerate([0, 10, 20, 30, 40, 50]):
                                 y = int(legend_h - (dist / 50.0) * legend_h)
                                 cv2.putText(legend, f"{dist}m", (2, max(12, y - 2)),
                                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
 
-                            # Affianca la legenda al frame depth
                             depth_for_display = np.hstack((depth_for_display, legend))
                         else:
                             depth_for_display = None
 
-                        # Disegna bounding boxes YOLO
                         if bgr_for_display is not None and dets:
                             for _, bbox, _ in dets:
                                 cv2.rectangle(
@@ -848,36 +656,15 @@ class GameLoop(object):
                 except Exception as e:
                     print(f"[DISPLAY] Error updating OpenCV windows: {e}")
 
-                # Timeout per resettare stato
-                # if time.time() - local_last_update > 0.7 and local_action != "normal":
-                #     local_action = "normal"
-
-                vel = self.world.player.get_velocity()
-                speed_mps = math.sqrt(vel.x**2 + vel.y**2 + vel.z**2)
-                speed_kmh = speed_mps * 3.6
-                
-                # if speed_kmh < 8 and local_action != "emergency_brake":
-                #     local_action="normal"
-
-                # Eventi utente (solo se in stato 'normal') 
                 if local_action == "normal":
-                    # print("[MQTT] Normal")
                     self.controller.parse_events(self.world, clock)
-                # else:
-                #     pygame.event.pump()  # evita freeze di pygame
 
-                # Parti sempre dallo stato attuale del veicolo
                 current_control = vehicle.get_control()
                 control = carla.VehicleControl()
 
-                # Mantieni sempre lo sterzo attuale del volante
                 control.steer = current_control.steer
 
-                # print(local_action)
-
-                # Applica comportamento in base allo stato MQTT
                 if local_action == "emergency_brake":
-                    # Sovrascrivi solo throttle e brake
                     control.throttle = 0.0
                     control.brake = 1.0
                     vehicle.apply_control(control)
@@ -885,7 +672,7 @@ class GameLoop(object):
 
                 elif local_action == "brake":
                     control.throttle = 0.0
-                    control.brake = local_level_brk #if local_level_brk > 0 else 0.3
+                    control.brake = local_level_brk
                     vehicle.apply_control(control)
                     print(f"[MQTT] Frenata lieve applicata (level={control.brake:.2f})")
 
@@ -896,11 +683,9 @@ class GameLoop(object):
                     print("[MQTT] Rilasciato acceleratore")
 
                 elif local_action == "warning":
-                    # Mantieni tutto (acceleratore e freno) come sono
                     self.controller.parse_events(self.world, clock)
                     print("[MQTT] Avviso al conducente: pedone vicino")
                 
-                # Render HUD e mondo 
                 self.render(clock)
 
         finally:
@@ -909,9 +694,6 @@ class GameLoop(object):
             if self.world is not None:
                 self.world.destroy()
             pygame.quit()
-
-
-
 
 def setup():
     argparser = mc.argparse.ArgumentParser(description='CARLA Manual Control Client')
@@ -990,12 +772,11 @@ game_loop = setup()
 vehicle = world.get_actors().filter('vehicle.*')[0]
 rgb_camera, depth_camera = setup_camera(vehicle)
 
-# === Sensore di collisione ===
 collision_data = {
     "count": 0,
     "last_time": 0.0,
     "last_actor": None,
-    "cooldown": 10.0  # secondi tra due eventi sullo stesso attore
+    "cooldown": 10.0
 }
 
 def collision_callback(event):
@@ -1004,16 +785,13 @@ def collision_callback(event):
     actor_id = other_actor.id
     actor_type = other_actor.type_id
 
-    # Calcola intensità urto
     impulse = event.normal_impulse
     magnitude = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
     now = time.time()
 
-    # --- Filtraggio logico per evitare eventi multipli ---
     if (actor_id == collision_data["last_actor"]) and (now - collision_data["last_time"] < collision_data["cooldown"]):
-        return  # stesso attore, stesso impatto → ignora
+        return
 
-    # --- Registra evento valido ---
     collision_data["count"] += 1
     collision_data["last_time"] = now
     collision_data["last_actor"] = actor_id
@@ -1028,8 +806,6 @@ def collision_callback(event):
 
     print(f"[COLLISION] #{collision_data['count']} with {actor_type}, intensity={magnitude:.2f}")
 
-
-# Blueprint sensore
 blueprint_library = world.get_blueprint_library()
 collision_bp = blueprint_library.find('sensor.other.collision')
 collision_sensor = world.spawn_actor(collision_bp, carla.Transform(), attach_to=vehicle)
@@ -1056,7 +832,6 @@ depth_camera.listen(lambda image: depth_camera_callback(image))
 
 def _append_metrics_to_file():
     try:
-        # assicura campi finali coerenti
         metrics["ended_at"] = metrics.get("ended_at") or time.time()
         metrics["d_min_records"] = d_min_records
         payload = json.dumps(metrics, ensure_ascii=False)
@@ -1067,7 +842,6 @@ def _append_metrics_to_file():
         print("[METRICS] Failed to append metrics:", e)
 
 def _graceful_exit_handler(signum=None, frame=None):
-    # Evita doppio write
     if metrics.get("_flushed"):
         return
     metrics["_flushed"] = True
@@ -1075,17 +849,13 @@ def _graceful_exit_handler(signum=None, frame=None):
 
     print(f"[EXIT] Received signal {signum}, shutting down...")
 
-    # Chiudi finestre e termina processo
     try:
         cv2.destroyAllWindows()
         pygame.quit()
     except Exception:
         pass
 
-    # Interrompi l'esecuzione
     sys.exit(0)
-
-
 
 atexit.register(_graceful_exit_handler)
 for _sig in (signal.SIGINT, signal.SIGTERM):
@@ -1098,14 +868,12 @@ threading.Thread(target=process_image, daemon=True).start()
 
 def cleanup():
     try:
-        # marca fine run e scrivi
         metrics["ended_at"] = time.time()
         if not metrics.get("_flushed"):
             metrics["_flushed"] = True
             _append_metrics_to_file()
     finally:
         remove_all(world)
-
 
 try:
     game_loop.start()
