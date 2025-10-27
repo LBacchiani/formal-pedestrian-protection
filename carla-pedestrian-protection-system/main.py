@@ -10,7 +10,6 @@ import random
 import time
 import threading
 import math
-from typing import Tuple
 import paho.mqtt.client as mqtt
 import json
 import queue
@@ -36,7 +35,6 @@ class Mode(Enum):
     STEERING_WHEEL = 2
 
 MODE = Mode.STEERING_WHEEL
-CAMERA_DEBUG = True
 NUM_WALKERS = 75
 
 BROKER = "localhost"
@@ -57,6 +55,14 @@ level_brk = 0.05
 mqtt_last_update = 0.0
 level_intensity = 1.0
 velocity = 0.0
+
+d_min_current = float('inf')
+d_min_records = []
+is_braking_active = False
+d_min_action = None
+
+brake_start_loc = None
+speed_before_brake = 0.0
 
 mqtt_client = mqtt.Client()
 mqtt_queue = queue.Queue(maxsize=50)
@@ -143,9 +149,9 @@ processor_thread.start()
 
 model = YOLO("yolov8n.pt")
 
-if CAMERA_DEBUG:
-    cv2.namedWindow('RGB image', cv2.WINDOW_NORMAL)
-    cv2.namedWindow('Depth image', cv2.WINDOW_NORMAL)
+
+cv2.namedWindow('RGB image', cv2.WINDOW_NORMAL)
+cv2.namedWindow('Depth image', cv2.WINDOW_NORMAL)
 
 client = carla.Client('localhost', 2000)
 client.set_timeout(10.0)
@@ -180,7 +186,6 @@ weather = carla.WeatherParameters(
 #     fog_falloff=1.5          # quanto la nebbia si intensifica con la distanza
 # )
 
-world = client.get_world()
 # world.set_weather(weather)
 
 metrics = {
@@ -205,7 +210,8 @@ metrics = {
         "count": 0,
         "binary": 0,          # 1 se almeno una collisione
         "events": []          # lista dettagli per contatto
-    }
+    },
+    "d_min_records": []
 }
 
 if MODE == Mode.STEERING_WHEEL:
@@ -533,9 +539,12 @@ def max_yaw_allowed(distance):
         # Interpolazione lineare da 37° (0 m) → 0° (30 m)
         return 37.0 * (1 - distance / 30.0)
 
+def get_current_action():
+    with mqtt_lock:
+        return current_action
 
 def process_image():
-    global input_rgb_image, input_depth_image, processed_output, velocity
+    global input_rgb_image, input_depth_image, processed_output, velocity, d_min_current, d_min_records, is_braking_active, d_min_action, brake_start_loc, speed_before_brake
 
     last_inference_time = 0.0
     target_dt = 0.105  # 10Hz
@@ -544,6 +553,7 @@ def process_image():
     print("[PROCESS] Avviato thread di elaborazione immagini...")
 
     while True:
+        
         # acquisizione immagini
         with input_rgb_image_lock:
             rgb_image = input_rgb_image
@@ -592,6 +602,8 @@ def process_image():
                 confidence=float(conf)
             ))
 
+        local_action = get_current_action()
+
         # trova pedone più vicino
         closest_ped = min(detected_pedestrians, key=lambda p: p.distance) if detected_pedestrians else None
 
@@ -636,6 +648,44 @@ def process_image():
         }
 
         send_mqtt_async(payload)
+
+        closest_distance = closest_ped.distance if closest_ped else None
+
+        # --- se siamo in stato di frenata ---
+        if local_action in ("brake", "emergency_brake") and closest_distance:
+            # marcare che è iniziato un episodio di frenata
+            if not is_braking_active:
+                is_braking_active = True
+                d_min_current = float('inf')
+                brake_start_loc = vehicle.get_location()
+                speed_before_brake = velocity
+
+            # aggiorna la distanza minima raggiunta durante la frenata
+            if closest_distance < d_min_current:
+                d_min_current = closest_distance
+                d_min_action = local_action
+
+        # --- se la frenata è terminata ---
+        elif is_braking_active and local_action not in ("brake", "emergency_brake"):
+            stop_loc = vehicle.get_location()
+            stopping_distance = brake_start_loc.distance(stop_loc) if brake_start_loc and stop_loc else None
+
+            # salva record
+            d_min_records.append({
+                "timestamp": time.time(),
+                "action": d_min_action if d_min_action else "unknown",
+                "d_min": d_min_current if d_min_current != float('inf') else None,
+                "stopping_distance": stopping_distance if stopping_distance else None,
+                "speed_before_brake": speed_before_brake if speed_before_brake else None
+            })
+            # reset
+            is_braking_active = False
+            d_min_current = float('inf')
+            brake_start_loc = None
+            stopping_distance = None
+            speed_before_brake = 0.0
+
+
 
         # stampa di debug
         # print("[SUMMARY]",
@@ -722,89 +772,81 @@ class GameLoop(object):
                     local_level_brk = level_brk
                     # local_last_update = mqtt_last_update
 
-                # Visualizzazione OpenCV
-                if CAMERA_DEBUG:
-                    try:
-                        ready = False
-                        with processed_output_lock:
-                            if processed_output is not None \
-                            and "rgb_image" in processed_output \
-                            and "depth_image" in processed_output \
-                            and "detections" in processed_output:
-                                rgb_arr = processed_output["rgb_image"]
-                                depth_arr = processed_output["depth_image"]
-                                dets = processed_output["detections"]
-                                ready = True
 
-                        if ready:
-                            # RGB: da RGB (CARLA) a BGR (OpenCV)
-                            if rgb_arr is not None and rgb_arr.ndim == 3 and rgb_arr.shape[2] >= 3:
-                                bgr_for_display = cv2.cvtColor(rgb_arr[:, :, :3], cv2.COLOR_RGB2BGR)
-                            else:
-                                bgr_for_display = None
+                try:
+                    ready = False
+                    with processed_output_lock:
+                        if processed_output is not None \
+                        and "rgb_image" in processed_output \
+                        and "depth_image" in processed_output \
+                        and "detections" in processed_output:
+                            rgb_arr = processed_output["rgb_image"]
+                            depth_arr = processed_output["depth_image"]
+                            dets = processed_output["detections"]
+                            ready = True
 
-                            # DEPTH: converti da codifica CARLA a visuale colorata
-                            if depth_arr is not None and depth_arr.ndim == 3 and depth_arr.shape[2] >= 4:
-                                rgb = depth_arr[:, :, :3].astype(np.uint32)
-                                r = rgb[:, :, 2]
-                                g = rgb[:, :, 1]
-                                b = rgb[:, :, 0]
-                                norm = (r + g * 256 + b * 256**2) / (256**3 - 1)
-                                depth_m = np.clip(norm * 1000.0, 0, 50)
-                                depth_vis = (255 * (1.0 - depth_m / 50.0)).astype(np.uint8)
-                                depth_for_display = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
+                    if ready:
+                        # RGB: da RGB (CARLA) a BGR (OpenCV)
+                        if rgb_arr is not None and rgb_arr.ndim == 3 and rgb_arr.shape[2] >= 3:
+                            bgr_for_display = cv2.cvtColor(rgb_arr[:, :, :3], cv2.COLOR_RGB2BGR)
+                        else:
+                            bgr_for_display = None
 
-                                # Aggiungi legenda laterale (color bar) 
-                                h, w, _ = depth_for_display.shape
-                                legend_h = h
-                                legend_w = 40
-                                legend = np.linspace(255, 0, legend_h).astype(np.uint8)
-                                legend = cv2.applyColorMap(legend.reshape(-1, 1), cv2.COLORMAP_JET)
-                                legend = cv2.resize(legend, (legend_w, legend_h))
+                        # DEPTH: converti da codifica CARLA a visuale colorata
+                        if depth_arr is not None and depth_arr.ndim == 3 and depth_arr.shape[2] >= 4:
+                            rgb = depth_arr[:, :, :3].astype(np.uint32)
+                            r = rgb[:, :, 2]
+                            g = rgb[:, :, 1]
+                            b = rgb[:, :, 0]
+                            norm = (r + g * 256 + b * 256**2) / (256**3 - 1)
+                            depth_m = np.clip(norm * 1000.0, 0, 50)
+                            depth_vis = (255 * (1.0 - depth_m / 50.0)).astype(np.uint8)
+                            depth_for_display = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
 
-                                # Testo scala metri
-                                step = legend_h // 5
-                                for i, dist in enumerate([0, 10, 20, 30, 40, 50]):
-                                    y = int(legend_h - (dist / 50.0) * legend_h)
-                                    cv2.putText(legend, f"{dist}m", (2, max(12, y - 2)),
-                                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                            # Aggiungi legenda laterale (color bar) 
+                            h, w, _ = depth_for_display.shape
+                            legend_h = h
+                            legend_w = 40
+                            legend = np.linspace(255, 0, legend_h).astype(np.uint8)
+                            legend = cv2.applyColorMap(legend.reshape(-1, 1), cv2.COLORMAP_JET)
+                            legend = cv2.resize(legend, (legend_w, legend_h))
 
-                                # Affianca la legenda al frame depth
-                                depth_for_display = np.hstack((depth_for_display, legend))
-                            else:
-                                depth_for_display = None
+                            # Testo scala metri
+                            step = legend_h // 5
+                            for i, dist in enumerate([0, 10, 20, 30, 40, 50]):
+                                y = int(legend_h - (dist / 50.0) * legend_h)
+                                cv2.putText(legend, f"{dist}m", (2, max(12, y - 2)),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
 
-                            # Disegna bounding boxes YOLO
-                            if bgr_for_display is not None and dets:
-                                for _, bbox, _ in dets:
-                                    cv2.rectangle(
-                                        bgr_for_display, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2
-                                    )
+                            # Affianca la legenda al frame depth
+                            depth_for_display = np.hstack((depth_for_display, legend))
+                        else:
+                            depth_for_display = None
 
-                            # Disegna bounding boxes YOLO
-                            if bgr_for_display is not None and dets:
-                                for _, bbox, _ in dets:
-                                    cv2.rectangle(
-                                        bgr_for_display, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2
-                                    )
-                                steer_angle_deg = vehicle.get_control().steer * 35.0
-                                cv2.line(
-                                    bgr_for_display,
-                                    (CAMERA_WIDTH // 2, CAMERA_HEIGHT),
-                                    (CAMERA_WIDTH // 2 + int(math.tan(math.radians(steer_angle_deg)) * 300),
-                                    CAMERA_HEIGHT - 300),
-                                    (0, 0, 255), 2
+                        # Disegna bounding boxes YOLO
+                        if bgr_for_display is not None and dets:
+                            for _, bbox, _ in dets:
+                                cv2.rectangle(
+                                    bgr_for_display, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2
                                 )
+                            steer_angle_deg = vehicle.get_control().steer * 35.0
+                            cv2.line(
+                                bgr_for_display,
+                                (CAMERA_WIDTH // 2, CAMERA_HEIGHT),
+                                (CAMERA_WIDTH // 2 + int(math.tan(math.radians(steer_angle_deg)) * 300),
+                                CAMERA_HEIGHT - 300),
+                                (0, 0, 255), 2
+                            )
 
-                            if bgr_for_display is not None:
-                                cv2.imshow('RGB image', bgr_for_display)
-                            if depth_for_display is not None:
-                                cv2.imshow('Depth image', depth_for_display)
+                        if bgr_for_display is not None:
+                            cv2.imshow('RGB image', bgr_for_display)
+                        if depth_for_display is not None:
+                            cv2.imshow('Depth image', depth_for_display)
 
-                            cv2.waitKey(1)
+                        cv2.waitKey(1)
 
-                    except Exception as e:
-                        print(f"[DISPLAY] Error updating OpenCV windows: {e}")
+                except Exception as e:
+                    print(f"[DISPLAY] Error updating OpenCV windows: {e}")
 
                 # Timeout per resettare stato
                 # if time.time() - local_last_update > 0.7 and local_action != "normal":
@@ -1016,6 +1058,7 @@ def _append_metrics_to_file():
     try:
         # assicura campi finali coerenti
         metrics["ended_at"] = metrics.get("ended_at") or time.time()
+        metrics["d_min_records"] = d_min_records
         payload = json.dumps(metrics, ensure_ascii=False)
         with open(METRICS_PATH, "a", encoding="utf-8") as f:
             f.write(payload + "\n")
