@@ -17,12 +17,40 @@ def print_buffer_model(model, buffer_vars):
     """Return a Python list of string values for buffer entries from model."""
     return [model_val(model, v) for v in buffer_vars]
 
-def print_ce_vars(m, s_d, s_c, s_u, t, B_C, B_TTC, B_cs):
+def print_ce_vars(m, s_d, s_c, t, B_C, B_TTC, B_cs):
     """Utility function to print common continuous state variables"""
-    print(f"    s_d = {model_val(m, s_d)}, s_c = {model_val(m, s_c)}, s_u = {model_val(m, s_u)}, t = {model_val(m, t)}")
+    print(f"    s_d = {model_val(m, s_d)}, s_c = {model_val(m, s_c)}, t = {model_val(m, t)}")
     print(f"    B_C: {print_buffer_model(m, B_C)}")
     print(f"    B_TTC: {print_buffer_model(m, B_TTC)}")
     print(f"    B_cs: {print_buffer_model(m, B_cs)}")
+
+def buffer_constraints(B_C, B_TTC, B_cs, s_d, s_c, t):
+    constraints = []
+    for i in range(N):
+        constraints.append(And(B_C[i] >= 0, B_C[i] <= 1))
+        constraints.append(And(B_TTC[i] >= 0, B_TTC[i] <= NO_TTC))
+        constraints.append(Or(B_cs[i] == 0, B_cs[i] == 1))
+        constraints.append(Implies(B_C[i] <= TH_C, And(B_TTC[i] == NO_TTC, B_cs[i] == 0)))
+    constraints.append(Implies(detected(B_C, B_TTC, B_cs, s_d, s_c, t), s_d == 0))
+    constraints.append(Implies(crossing(B_C, B_TTC, B_cs, s_d, s_c, t), s_c == 0))
+
+    ####s_d constraints####
+    first_idx_d = Int('first_idx_d')
+    constraints.append(Or([first_idx_d == i for i in range(N)] + [first_idx_d == -1]))
+    for i in range(N):
+        constraints.append(Implies(first_idx_d == i, And(B_C[i] >= TH_C, And([B_C[j] < TH_C for j in range(i)]), detected(B_C, B_TTC, B_cs, s_d, s_c, t) )))
+    constraints.append(Implies(first_idx_d == -1, And([B_C[i] < TH_C for i in range(N)])))
+    constraints.append(s_d == If(first_idx_d >= 0, CAMERA_FREQ * first_idx_d, TH_D_STALE))
+    
+    ####s_c constraints####
+    first_idx_c = Int('first_idx_c')
+    constraints.append(Or([first_idx_c == i for i in range(N)] + [first_idx_c == -1]))
+    for i in range(N):
+        constraints.append(Implies(first_idx_c == i, And(B_cs[i] == 1, And([B_cs[j] == 0 for j in range(i)]), crossing(B_C, B_TTC, B_cs, s_d, s_c, t))))
+    constraints.append(Implies(first_idx_c == -1, And([B_cs[i] == 0 for i in range(N)])))
+    constraints.append(s_c == If(first_idx_c >= 0, CAMERA_FREQ * first_idx_c, TH_C_STALE))
+
+    return And(constraints)
 
 # ---------------------------------------------------------------------------
 # Determinism property check
@@ -40,20 +68,21 @@ def prop_guards_mutually_exclusive():
     s = Solver()
     all_verified = True
 
-    B_C, B_TTC, B_cs, s_d, s_c, s_u, t = declare_continuous_vars()
+    B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
     q = Const('q', State)
     states = [Normal, SafeWarning, Throttling, SoftBraking, EmergencyBraking]
 
     for q_val in states:
-        trans_constraints = [ transition(q, qn, B_C, B_TTC, B_cs, s_d, s_c, s_u, t) for qn in states ]
+        trans_constraints = [ transition(q, qn, B_C, B_TTC, B_cs, s_d, s_c, t) for qn in states ]
 
         for i in range(len(trans_constraints)):
             for j in range(i + 1, len(trans_constraints)):
                 s.push()
+                s.add(buffer_constraints(B_C, B_TTC, B_cs, s_d, s_c, t))
                 s.add(q == q_val)
                 s.add(trans_constraints[i])
                 s.add(trans_constraints[j])
-                s.add(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, s_u, t))
+                s.add(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t))
 
                 if s.check() == sat:
                     m = s.model()
@@ -61,12 +90,62 @@ def prop_guards_mutually_exclusive():
                     print(f"\n✗ Non-determinism detected for q = {q_val}")
                     print(f"  Conflicting transitions to: {states[i]} and {states[j]}")
                     print("  Counterexample full state:")
-                    print_ce_vars(m, s_d, s_c, s_u, t, B_C, B_TTC, B_cs)
+                    print_ce_vars(m, s_d, s_c, t, B_C, B_TTC, B_cs)
                 s.pop()
 
     print(f"\n{'✓' if all_verified else '✗'} All guards are mutually exclusive: {'VERIFIED' if all_verified else 'FAILED'}")
     print("="*70)
     return all_verified
+
+def prop_invariant_vs_transitions_exclusive():
+    """
+    PROPERTY: Invariant vs Transitions Mutual Exclusivity
+    Verify that in any discrete state, either the invariant holds or transitions can fire, never both.
+    """
+    print("\n" + "="*70)
+    print("PROPERTY: Invariant vs Transitions Mutual Exclusivity")
+    print("="*70)
+
+    s = Solver()
+    all_verified = True
+
+    B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
+    q = Const('q', State)
+    states = [Normal, SafeWarning, Throttling, SoftBraking, EmergencyBraking]
+
+    for q_val in states:
+        # Collect all transitions from q_val
+        trans_constraints = [transition(q, qn, B_C, B_TTC, B_cs, s_d, s_c, t) for qn in states]
+
+        s.push()
+        s.add(buffer_constraints(B_C, B_TTC, B_cs, s_d, s_c, t))
+        s.add(q == q_val)
+        s.add(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t))
+        s.add(Or(trans_constraints))  # At least one transition is fireable
+
+        if s.check() == sat:
+            m = s.model()
+            all_verified = False
+            # Identify which transitions are true in this model
+            firing_transitions = []
+            for idx, trans in enumerate(trans_constraints):
+                s.push()
+                s.add(trans)
+                if s.check() == sat:
+                    firing_transitions.append(states[idx])
+                s.pop()
+
+            print(f"\n✗ Property violated for q = {q_val}")
+            print(f"  Invariant holds AND transitions fireable: {firing_transitions}")
+            print("  Counterexample full state:")
+            print_ce_vars(m, s_d, s_c, t, B_C, B_TTC, B_cs)
+        s.pop()
+
+    print(f"\n{'✓' if all_verified else '✗'} Property check: {'VERIFIED' if all_verified else 'FAILED'}")
+    print("="*70)
+    return all_verified
+
+
 
 # ---------------------------------------------------------------------------
 # Completeness property check
@@ -84,17 +163,18 @@ def prop_guards_complete():
     s = Solver()
     all_verified = True
 
-    B_C, B_TTC, B_cs, s_d, s_c, s_u, t = declare_continuous_vars()
+    B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
     q = Const('q', State)
     states = [Normal, SafeWarning, Throttling, SoftBraking, EmergencyBraking]
 
     for q_val in states:
-        trans_constraints = [ transition(q, qn, B_C, B_TTC, B_cs, s_d, s_c, s_u, t) for qn in states ]
+        trans_constraints = [ transition(q, qn, B_C, B_TTC, B_cs, s_d, s_c, t) for qn in states ]
     
         s.push()
+        s.add(buffer_constraints(B_C, B_TTC, B_cs, s_d, s_c, t))
         s.add(q == q_val)
         s.add(Not(Or(trans_constraints)))      # No transition is fireable
-        s.add(Not(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, s_u, t)))  # Invariant fails (VIOLATION)
+        s.add(Not(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t)))  # Invariant fails (VIOLATION)
 
         if s.check() == sat:
             m = s.model()
@@ -102,7 +182,7 @@ def prop_guards_complete():
             print(f"\n✗ Completeness violation detected for q = {q_val}")
             print("  No fireable transition AND invariant does NOT hold (Deadlock State Found)!")
             print("  Counterexample full state:")
-            print_ce_vars(m, s_d, s_c, s_u, t, B_C, B_TTC, B_cs)
+            print_ce_vars(m, s_d, s_c, t, B_C, B_TTC, B_cs)
         s.pop()
 
     print(f"\n{'✓' if all_verified else '✗'} Completeness {'VERIFIED' if all_verified else 'FAILED'}")
@@ -127,16 +207,18 @@ def prop_distance_safety():
     all_verified = True
 
     # State variables (pre-sense, post-sense, post-reset)
-    B_C, B_TTC, B_cs, s_d, s_c, s_u, t = declare_continuous_vars()
+    B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
     q = Const('q', State)
-    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next = declare_continuous_vars("_next")
+    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next = declare_continuous_vars("_next")
     q_next = Const('q_next', State)
-    B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, s_u_reset, t_reset = declare_continuous_vars("_reset")
+    B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, t_reset = declare_continuous_vars("_reset")
     
     # Define generic sensor values for sense() for simplicity
     C_new_generic = RealVal(1)
     TTC_new_risky = RealVal(TH_TTC_R)
     cs_new_crossing = IntVal(1)
+    s.add(buffer_constraints(B_C, B_TTC, B_cs, s_d, s_c, t))
+
 
     def check_safety_violation(solver, condition_trigger, unsafe_state, prop_name, c_new, ttc_new, cs_new):
         """Helper to check one safety level violation"""
@@ -145,22 +227,22 @@ def prop_distance_safety():
         
         # 1. Sense Jump (X -> X_next)
         solver.add(t >= CAMERA_FREQ) # Ensures sense fires
-        solver.add(sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next, C_new=c_new, TTC_new=ttc_new, cs_new=cs_new))
+        solver.add(sense(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, C_new=c_new, TTC_new=ttc_new, cs_new=cs_new))
         
         # 2. Trigger Condition: Distance requirement is met on the fresh data (X_next)
         solver.add(condition_trigger)
         
         # 3. Transition Check (q -> q_next)
-        solver.add(transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next))
+        solver.add(transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next))
         
         # 4. Timer Reset (X_next -> X_reset)
-        solver.add(reset_timers(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next, B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, s_u_reset, t_reset))
+        solver.add(reset_timers(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, t_reset))
         
         # 5. Violation: System transitions to an unsafe discrete state q_next
         solver.add(Not(q_next == unsafe_state))
         
         # 6. Consistency: The resulting X_reset must satisfy the invariant of the violating q_next
-        solver.add(invariant(q_next, B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, s_u_reset, t_reset))
+        solver.add(invariant(q_next, B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, t_reset))
         
         if solver.check() == sat:
             all_verified = False
@@ -168,16 +250,16 @@ def prop_distance_safety():
             print(f"\n✗ Distance safety violated: {prop_name}")
             print(f"  q_pre = {model_val(m, q)}, q_next = {model_val(m, q_next)}")
             print("  Pre-sense state:")
-            print_ce_vars(m, s_d, s_c, s_u, t, B_C, B_TTC, B_cs)
+            print_ce_vars(m, s_d, s_c, t, B_C, B_TTC, B_cs)
             print("  Post-sense (Guard) state:")
-            print_ce_vars(m, s_d_next, s_c_next, s_u_next, t_next, B_C_next, B_TTC_next, B_cs_next)
+            print_ce_vars(m, s_d_next, s_c_next, t_next, B_C_next, B_TTC_next, B_cs_next)
         solver.pop()
 
     # --- Critical distance → EmergencyBraking ---
     check_safety_violation(s, 
-        And(valid_d(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next),
-            valid_c(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next),
-            c_dist(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next)),
+        And(valid_d(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next),
+            valid_c(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next),
+            c_dist(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)),
         EmergencyBraking,
         "Critical distance requires EmergencyBraking",
         RealVal(1), RealVal(0.1), IntVal(1) # New sensor data is critical
@@ -185,9 +267,9 @@ def prop_distance_safety():
 
     # --- Risky distance → SoftBraking ---
     check_safety_violation(s, 
-        And(valid_d(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next),
-            valid_c(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next),
-            r_c_dist(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next)), 
+        And(valid_d(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next),
+            valid_c(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next),
+            r_c_dist(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)), 
         SoftBraking,
         "Risky distance requires SoftBraking",
         RealVal(1), TTC_new_risky, IntVal(1) # New sensor data is risky
@@ -195,9 +277,9 @@ def prop_distance_safety():
     
     # --- Short distance → Throttling ---
     check_safety_violation(s, 
-        And(valid_d(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next),
-            valid_c(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next),
-            s_r_dist(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next)),
+        And(valid_d(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next),
+            valid_c(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next),
+            s_r_dist(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)),
         Throttling,
         "Short distance requires Throttling",
         RealVal(1), RealVal(TH_TTC_S), IntVal(1) # New sensor data is short
@@ -223,31 +305,32 @@ def prop_safe_transition_on_staleness():
     s = Solver()
     all_verified = True
 
-    B_C, B_TTC, B_cs, s_d, s_c, s_u, t = declare_continuous_vars()
-    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next = declare_continuous_vars("_next")
+    B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
+    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next = declare_continuous_vars("_next")
     q = Const('q', State)
     q_next = Const('q_next', State)
 
     for current_state in [Throttling, SoftBraking, EmergencyBraking]:
         s.push()
+        s.add(buffer_constraints(B_C, B_TTC, B_cs, s_d, s_c, t))
         s.add(q == current_state)
         s.add(t >= CAMERA_FREQ)
-        s.add(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, s_u, t))
+        s.add(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t))
         
         # Sense: Sensor sees NO pedestrian (C_new=0), causing timers to advance/reset
-        s.add(sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next, C_new=RealVal(0), TTC_new=RealVal(0), cs_new=IntVal(0)))
+        s.add(sense(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, C_new=RealVal(0), TTC_new=RealVal(0), cs_new=IntVal(0)))
         
         # Condition for Staleness: Data invalid after sensor shift
         if current_state == EmergencyBraking:
             # EB depends only on valid_d. Staleness of s_d must lead to Normal.
             s.add(s_d_next > TH_D_STALE)
-            s.add(transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next))
+            s.add(transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next))
             s.add(q_next != Normal)
         else:
             # Throttling and SoftBraking depend on valid_d AND valid_c. Losing either should regress.
             s.add(Or(s_d_next > TH_D_STALE, s_c_next > TH_C_STALE))
 
-            s.add(transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next))
+            s.add(transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next))
             
             # Violation: q_next is still in a braking state (Throttling, Soft, Emergency)
             s.add(Or(q_next == Throttling, q_next == SoftBraking, q_next == EmergencyBraking))
@@ -258,7 +341,7 @@ def prop_safe_transition_on_staleness():
             print(f"\n✗ Staleness violation from q = {current_state}")
             print(f"  q_next = {model_val(m, q_next)}")
             print(f"  s_d_next = {model_val(m, s_d_next)}, s_c_next = {model_val(m, s_c_next)}")
-            print_ce_vars(m, s_d, s_c, s_u, t, B_C, B_TTC, B_cs)
+            print_ce_vars(m, s_d, s_c, t, B_C, B_TTC, B_cs)
         s.pop()
 
     print(f"\n{'✓' if all_verified else '✗'} Safe Transition on Data Staleness {'VERIFIED' if all_verified else 'FAILED'}")
@@ -283,9 +366,9 @@ def prop_sudden_pedestrian_reaction():
     all_verified = True
 
     # Initial variables (q is unbounded)
-    B_C, B_TTC, B_cs, s_d, s_c, s_u, t = declare_continuous_vars()
+    B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
     q = Const('q', State)
-    s.add(initial_state(q,B_C, B_TTC, B_cs, s_d, s_c, s_u, t))
+    s.add(initial_state(q,B_C, B_TTC, B_cs, s_d, s_c, t))
     
 
     max_steps = RT_HALF_FRAMES # The maximum allowed steps
@@ -297,34 +380,34 @@ def prop_sudden_pedestrian_reaction():
 
     # Unroll transitions
     current_B_C, current_B_TTC, current_B_cs = B_C, B_TTC, B_cs
-    current_s_d, current_s_c, current_s_u, current_t = s_d, s_c, s_u, t
+    current_s_d, current_s_c, current_t = s_d, s_c, t
     current_q = q
     
-    s.add(invariant(current_q, current_B_C, current_B_TTC, current_B_cs, current_s_d, current_s_c, current_s_u, current_t))
+    s.add(invariant(current_q, current_B_C, current_B_TTC, current_B_cs, current_s_d, current_s_c, current_t))
     s.add(current_t >= CAMERA_FREQ) # First step must be a sense
 
     for step in range(max_steps):
-        B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next = declare_continuous_vars(f"_next{step}")
-        B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, s_u_reset, t_reset = declare_continuous_vars(f"_reset{step}")
+        B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next = declare_continuous_vars(f"_next{step}")
+        B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, t_reset = declare_continuous_vars(f"_reset{step}")
         q_next = Const(f'q_next{step}', State)
 
         # 1. Sense Jump (X -> X_next): Applies critical input
-        s.add(sense(current_B_C, current_B_TTC, current_B_cs, current_s_d, current_s_c, current_s_u, current_t,
-                    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
+        s.add(sense(current_B_C, current_B_TTC, current_B_cs, current_s_d, current_s_c, current_t,
+                    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next,
                     C_new_critical, TTC_new_critical, cs_new_crossing))
         
         # 2. Transition (q -> q_next) - GUARD CHECK ON X_NEXT
-        s.add(transition(current_q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next))
+        s.add(transition(current_q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next))
 
         # 3. Timer Reset (X_next -> X_reset)
-        s.add(reset_timers(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next, B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, s_u_reset, t_reset))
+        s.add(reset_timers(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, t_reset))
         
         # 4. Invariant must hold on the next state (q_next, X_reset)
-        s.add(invariant(q_next, B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, s_u_reset, t_reset))
+        s.add(invariant(q_next, B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, t_reset))
 
         # Update current step for next iteration (q, X) -> (q_next, X_reset)
         current_B_C, current_B_TTC, current_B_cs = B_C_reset, B_TTC_reset, B_cs_reset
-        current_s_d, current_s_c, current_s_u, current_t = s_d_reset, s_c_reset, s_u_reset, t_reset
+        current_s_d, current_s_c, current_current_t = s_d_reset, s_c_reset, t_reset
         current_q = q_next
 
     # Liveness Violation: By the end, state must NOT be EmergencyBraking
@@ -365,9 +448,9 @@ def prop_monotonic_safety_response():
     s = Solver()
     all_verified = True
 
-    B_C, B_TTC, B_cs, s_d, s_c, s_u, t = declare_continuous_vars()
-    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next = declare_continuous_vars("_next")
-    B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, s_u_reset, t_reset = declare_continuous_vars("_reset")
+    B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
+    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next = declare_continuous_vars("_next")
+    B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, t_reset = declare_continuous_vars("_reset")
     q = Const('q', State)
     q_next = Const('q_next', State)
 
@@ -385,7 +468,7 @@ def prop_monotonic_safety_response():
         # Initial state constraints
         s.add(q == q_from)
         s.add(t >= CAMERA_FREQ) # Must be a sense event
-        s.add(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, s_u, t))
+        s.add(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t))
         
         # Sensor input variables
         C_new = Real('C_new')
@@ -393,20 +476,20 @@ def prop_monotonic_safety_response():
         cs_new = Int('cs_new')
         
         # 1. Sense Jump (X -> X_next)
-        s.add(sense(B_C, B_TTC, B_cs, s_d, s_c, s_u, t,
-                    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
+        s.add(sense(B_C, B_TTC, B_cs, s_d, s_c, t,
+                    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next,
                     C_new, TTC_new, cs_new))
         
         # 2. Transition (q -> q_next) - GUARD CHECK ON X_NEXT
-        s.add(transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next))
+        s.add(transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next))
         s.add(q_next == q_to) # VIOLATION: Transitioned to a less aggressive state
         
         # 3. Timer Reset (X_next -> X_reset)
-        s.add(reset_timers(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
-                          B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, s_u_reset, t_reset))
+        s.add(reset_timers(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next,
+                          B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, t_reset))
         
         # 4. Consistency: Invariant must hold on the resulting state
-        s.add(invariant(q_next, B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, s_u_reset, t_reset))
+        s.add(invariant(q_next, B_C_reset, B_TTC_reset, B_cs_reset, s_d_reset, s_c_reset, t_reset))
         
         # 5. Trigger: Fresh data (C_new, TTC_new, cs_new) still shows threat matching or exceeding q_from's conditions
         s.add(C_new >= TH_C)  # High confidence detection
@@ -427,7 +510,7 @@ def prop_monotonic_safety_response():
             print(f"\n✗ Monotonicity violation: {model_val(m, q)} → {model_val(m, q_next)}")
             print(f"  Fresh sensor data shows continuing threat: C_new = {model_val(m, C_new)}, TTC_new = {model_val(m, TTC_new)}")
             print("  Pre-sense state:")
-            print_ce_vars(m, s_d, s_c, s_u, t, B_C, B_TTC, B_cs)
+            print_ce_vars(m, s_d, s_c, t, B_C, B_TTC, B_cs)
         
         s.pop()
 
@@ -441,6 +524,7 @@ def prop_monotonic_safety_response():
 
 if __name__ == "__main__":
     prop_guards_mutually_exclusive()
+    prop_invariant_vs_transitions_exclusive()
     prop_guards_complete()
     prop_distance_safety()
     prop_safe_transition_on_staleness()

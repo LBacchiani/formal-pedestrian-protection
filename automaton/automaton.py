@@ -95,7 +95,7 @@ class PedestrianProtectionAutomaton:
     - Detection confidence (B_C)
     - Time-to-collision (B_TTC)
     - Crossing status (B_cross)
-    - Staleness timers (s_d, s_c, s_u)
+    - Staleness timers (s_d, s_c)
     """
     
     def __init__(self):
@@ -111,7 +111,6 @@ class PedestrianProtectionAutomaton:
         # Staleness timers (ms)
         self.s_d = 0  # Detection staleness
         self.s_c = 0  # Crossing staleness
-        self.s_u = 0  # Uncertainty staleness
         
         # Last step call timestamp (seconds)
         self.last_step_call: Optional[float] = None
@@ -183,9 +182,6 @@ class PedestrianProtectionAutomaton:
         return not (self._s_distance() or self._s_r_distance() or 
                    self._r_c_distance() or self._c_distance())
 
-    def valid_u(self) -> bool:
-        return self._uncertain_distance() and self.s_u < MAX_UNCERTAIN
-
     
     # ========================================================================
     # STATE TRANSITION LOGIC
@@ -199,7 +195,6 @@ class PedestrianProtectionAutomaton:
         """
         valid_d = self._valid_d()
         valid_c = self._valid_c()
-        valid_u = self._valid_u()
         det = self._detected()
         cross = self._crossing()
         s_dist = self._s_distance()
@@ -208,140 +203,70 @@ class PedestrianProtectionAutomaton:
         c_dist = self._c_distance()
         unc_dist = self._uncertain_distance()
 
-        inv_normal = not valid_d or s_dist or unc_dist
-        inv_safe_warning = (valid_d and not valid_c) or valid_u
-        inv_throttling = valid_d and valid_c and (sr_dist or valid_u)
-        inv_soft_braking = valid_d and valid_c and (rc_dist or valid_u)
+        inv_normal = not valid_d or (valid_c and (s_dist or unc_dist))
+        inv_safe_warning = valid_d and (not valid_c or (valid_c and unc_dist))
+        inv_throttling = valid_c and (sr_dist or unc_dist)
+        inv_soft_braking = valid_c and (rc_dist or unc_dist)
         inv_emergency_braking = valid_c
 
-        G_to_normal = not valid_d or s_dist or not valid_u
+        G_to_normal = not valid_d or (cross and s_dist)
         G_to_safe_warning = valid_d and not valid_c
-        G_to_throttling = valid_d and valid_c and sr_dist
-        G_to_soft_braking = valid_d and valid_c and rc_dist
-        G_to_emergency_braking = valid_d and valid_c and c_dist
+        G_to_throttling = valid_c and sr_dist
+        G_to_soft_braking = valid_c and rc_dist
+        G_to_emergency_braking = valid_c and c_dist
         
         # Transition logic based on current state
         if self.state == State.NORMAL:
-            # e1: Stay in Normal
-            #if not valid_d or s_dist or unc_dist:
             if inv_normal: 
                 return State.NORMAL, Action.NONE
-            # e2: To SafeWarning
-            #if valid_d and not valid_c:
             if G_to_safe_warning:
                 return State.SAFE_WARNING, Action.ALERTING_DRIVER
-            # e3: To Throttling
-            #if valid_d and ((not valid_c and rc_dist) or (valid_c and sr_dist)):
             if G_to_throttling:
                 return State.THROTTLING, Action.THROTTLE_ACCELERATION
-            # e4: To CriticalSlowdown
-            # if valid_d and not valid_c and c_dist:
-            #     return State.CRITICAL_SLOWDOWN, Action.BRAKE
-            # e5: To SoftBraking
-            #if valid_d and valid_c and rc_dist:
             if G_to_soft_braking:
                 return State.SOFT_BRAKING, Action.BRAKE
-            # e6: To EmergencyBraking
-            #if valid_d and valid_c and c_dist:
             if G_to_emergency_braking:
                 return State.EMERGENCY_BRAKING, Action.STOP
         
         elif self.state == State.SAFE_WARNING:
-            # e7: To Normal (including handover on uncertainty timeout)
-            #if not valid_d or s_dist or self.s_u >= MAX_UNCERTAIN:
             if G_to_normal:
                 return State.NORMAL, Action.NONE
-            # e8: Stay in SafeWarning (including uncertain with timeout not reached)
             if inv_safe_warning:
                 return State.SAFE_WARNING, Action.NONE
-            # e9: To Throttling
-            #if valid_d and ((not valid_c and rc_dist) or (valid_c and sr_dist)):
             if G_to_throttling:
                 return State.THROTTLING, Action.THROTTLE_ACCELERATION
-            # e10: To CriticalSlowdown
-            # if valid_d and not valid_c and c_dist:
-            #     return State.CRITICAL_SLOWDOWN, Action.BRAKE
-            # e11: To SoftBraking
-            #if valid_d and valid_c and rc_dist:
             if G_to_soft_braking:
                 return State.SOFT_BRAKING, Action.BRAKE
-            # e12: To EmergencyBraking
-            #if valid_d and valid_c and c_dist:
             if G_to_emergency_braking:
                 return State.EMERGENCY_BRAKING, Action.STOP
         
         elif self.state == State.THROTTLING:
-            # e13: To Normal (including handover on uncertainty timeout)
-            #if not valid_d or s_dist or self.s_u >= MAX_UNCERTAIN:
             if G_to_normal:
                 return State.NORMAL, Action.STOP_THROTTLING
-            # e14: To SafeWarning
-            #if valid_d and not valid_c and sr_dist:
             if G_to_safe_warning:
                 return State.SAFE_WARNING, Action.STOP_THROTTLING
-            # e15: Stay in Throttling (including uncertain with timeout not reached)
-            #if valid_d and ((not valid_c and rc_dist) or (valid_c and sr_dist) or (unc_dist and self.s_u < MAX_UNCERTAIN)):
             if inv_throttling:
                 return State.THROTTLING, Action.NONE
-            # e16: To CriticalSlowdown
-            # if valid_d and not valid_c and c_dist:
-            #     return State.CRITICAL_SLOWDOWN, Action.BRAKE
-            # e17: To SoftBraking
-            #if valid_d and valid_c and rc_dist:
             if G_to_soft_braking:
                 return State.SOFT_BRAKING, Action.BRAKE
-            # e18: To EmergencyBraking
-            #if valid_d and valid_c and c_dist:
             if G_to_emergency_braking:
                 return State.EMERGENCY_BRAKING, Action.STOP
-        
-        # elif self.state == State.CRITICAL_SLOWDOWN:
-        #     # e19: To Normal (including handover on uncertainty timeout)
-        #     if not valid_d or s_dist or self.s_u >= MAX_UNCERTAIN:
-        #         return State.NORMAL, Action.STOP_BRAKING
-        #     # e20: To SafeWarning
-        #     if valid_d and not valid_c and sr_dist:
-        #         return State.SAFE_WARNING, Action.STOP_BRAKING
-        #     # e21: To Throttling
-        #     if (not valid_c and rc_dist) or (valid_c and sr_dist):
-        #         return State.THROTTLING, Action.BRAKE_TO_THROTTLE
-        #     # e22: Stay in CriticalSlowdown (including uncertain with timeout not reached)
-        #     if (valid_d and not valid_c and c_dist) or (valid_d and unc_dist and self.s_u < MAX_UNCERTAIN):
-        #         return State.CRITICAL_SLOWDOWN, Action.NONE
-        #     # e23: To SoftBraking
-        #     if valid_d and valid_c and rc_dist:
-        #         return State.SOFT_BRAKING, Action.BRAKE
-        #     # e24: To EmergencyBraking
-        #     if valid_d and valid_c and c_dist:
-        #         return State.EMERGENCY_BRAKING, Action.STOP
-        
+
         elif self.state == State.SOFT_BRAKING:
-            # e25: To Normal (including handover on uncertainty timeout)
-            #if not valid_d or not valid_c or s_dist or self.s_u >= MAX_UNCERTAIN:
             if G_to_normal:
                 return State.NORMAL, Action.STOP_BRAKING
-            # e26: To SafeWarning
-            #if valid_d and valid_c and sr_dist:
             if G_to_safe_warning:
                 return State.SAFE_WARNING, Action.STOP_BRAKING
             if G_to_throttling:
                 return State.THROTTLING, Action.BRAKE_TO_THROTTLE
-            # e27: Stay in SoftBraking (including uncertain with timeout not reached)
-            #if (valid_d and valid_c and rc_dist) or (valid_c and valid_d and unc_dist and self.s_u < MAX_UNCERTAIN):
             if inv_soft_braking:
                 return State.SOFT_BRAKING, Action.NONE
-            # e28: To EmergencyBraking
-            #if valid_d and valid_c and c_dist:
             if G_to_emergency_braking:
                 return State.EMERGENCY_BRAKING, Action.STOP
         
         elif self.state == State.EMERGENCY_BRAKING:
-            # e29: To Normal
-            #if not det or not cross:
             if not valid_c:
                 return State.NORMAL, Action.NONE
-            # e30: Stay in EmergencyBraking
-            #if cross:
             if inv_emergency_braking:
                 return State.EMERGENCY_BRAKING, Action.NONE
         
@@ -351,7 +276,7 @@ class PedestrianProtectionAutomaton:
             f"State invariants may be violated. "
             f"valid_d={valid_d}, valid_c={valid_c}, det={det}, cross={cross}, "
             f"s_dist={s_dist}, sr_dist={sr_dist}, rc_dist={rc_dist}, c_dist={c_dist}, "
-            f"unc_dist={unc_dist}, s_u={self.s_u}"
+            f"unc_dist={unc_dist}"
         )
     
     # ========================================================================
@@ -417,11 +342,6 @@ class PedestrianProtectionAutomaton:
             self.s_c = 0
         else:
             self.s_c = min(self.s_c + dt_ms, TH_C_STALE)
-
-        if self._uncertain_distance():
-            self.s_u = min(self.s_u + dt_ms, MAX_UNCERTAIN)
-        else:
-            self.s_u = 0
         
         # Check for state transitions
         new_state, action = self._check_transitions()
@@ -447,8 +367,7 @@ class PedestrianProtectionAutomaton:
             },
             'staleness': {
                 's_d': self.s_d,
-                's_c': self.s_c,
-                's_u': self.s_u
+                's_c': self.s_c
             },
             'validity': {
                 'valid_d': self._valid_d(),
