@@ -72,7 +72,7 @@ class Action(Enum):
     # BRAKE_TO_THROTTLE = "brake_to_throttle"
     # NONE = "_"  # No action
 
-    BRAKE = "mild_brake"
+    BRAKE = "brake"
     STOP = "emergency_brake"
     THROTTLE_ACCELERATION = "mild_brake" #mild brake con 0 di frenata e 0 di gas 
     ALERTING_DRIVER = "warning"
