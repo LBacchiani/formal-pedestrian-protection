@@ -52,7 +52,6 @@ RUN_START_TS = time.time()
 
 current_action = "normal"
 level_brk = 0.05
-mqtt_last_update = 0.0
 level_intensity = 1.0
 velocity = 0.0
 
@@ -88,7 +87,7 @@ def on_mqtt_message(client, userdata, msg):
         print("[MQTT] Warning: queue full, message dropped")
 
 def mqtt_processor():
-    global current_action, mqtt_last_update, level_brk, level_intensity, velocity
+    global current_action, level_brk, level_intensity, velocity
 
     while True:
         try:
@@ -113,11 +112,12 @@ def mqtt_processor():
                     if current_action == "normal":
                         level_brk = 0.05
                         level_intensity = 1
-                    if current_action == "brake":
-                        level_intensity += 1
-                        level_brk = smooth_increase(level_brk, level_intensity, 0.0007, velocity)
-                    mqtt_last_update = time.time()
 
+            with mqtt_lock:
+                if current_action == "brake":
+                        level_intensity += 1
+                        level_brk = smooth_increase(level_brk, level_intensity, 0.007, velocity)
+            
         except Exception as e:
             print("[MQTT] Error in processor:", e)
 
@@ -134,7 +134,7 @@ client.set_timeout(10.0)
 world = client.get_world()
 spectator = world.get_spectator()
 
-PEDESTRIAN = "DET"  # DET || "RANDOM"  
+PEDESTRIAN = "RANDOM"  # DET || "RANDOM"  
 
 weather = carla.WeatherParameters(
     cloudiness=0.0
@@ -577,7 +577,7 @@ class GameLoop(object):
         self.world.player.set_autopilot(False)
         try:
             clock = pygame.time.Clock()
-            global current_action, mqtt_last_update
+            global current_action
 
             while True:
                 # Sync tick 
@@ -668,23 +668,23 @@ class GameLoop(object):
                     control.throttle = 0.0
                     control.brake = 1.0
                     vehicle.apply_control(control)
-                    print("[MQTT] Frenata di emergenza attiva")
+                    # print("[MQTT] Frenata di emergenza attiva")
 
                 elif local_action == "brake":
                     control.throttle = 0.0
                     control.brake = local_level_brk
                     vehicle.apply_control(control)
-                    print(f"[MQTT] Frenata lieve applicata (level={control.brake:.2f})")
+                    # print(f"[MQTT] Frenata lieve applicata (level={control.brake:.2f})")
 
                 elif local_action == "mild_brake":
                     control.throttle = 0.0
                     control.brake = 0.0
                     vehicle.apply_control(control)
-                    print("[MQTT] Rilasciato acceleratore")
+                    # print("[MQTT] Rilasciato acceleratore")
 
                 elif local_action == "warning":
                     self.controller.parse_events(self.world, clock)
-                    print("[MQTT] Avviso al conducente: pedone vicino")
+                    # print("[MQTT] Avviso al conducente: pedone vicino")
                 
                 self.render(clock)
 
