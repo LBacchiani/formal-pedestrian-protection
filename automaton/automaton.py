@@ -230,7 +230,7 @@ class PedestrianProtectionAutomaton:
         
         elif self.state == State.SAFE_WARNING:
             if G_to_normal:
-                return State.NORMAL, Action.NONE
+                return State.NORMAL, Action.REMOVE_ALERT
             if inv_safe_warning:
                 return State.SAFE_WARNING, Action.NONE
             if G_to_throttling:
