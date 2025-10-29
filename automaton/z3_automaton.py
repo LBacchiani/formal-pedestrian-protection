@@ -167,7 +167,7 @@ def invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t):
                 valid_d(B_C, B_TTC, B_cs, s_d, s_c, t),
                 Or(
                     Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t)),
-                    And(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t),uncertain(B_C, B_TTC, B_cs, s_d, s_c, t))
+                    uncertain(B_C, B_TTC, B_cs, s_d, s_c, t)
                 ),
                 t < CAMERA_FREQ
             ),
@@ -215,7 +215,7 @@ def G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t):
     return And(
         Or(
             Not(valid_d(B_C, B_TTC, B_cs, s_d, s_c, t)),
-            And(crossing(B_C, B_TTC, B_cs, s_d, s_c, t), s_dist(B_C, B_TTC, B_cs, s_d, s_c, t))
+            And(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t), s_dist(B_C, B_TTC, B_cs, s_d, s_c, t))
         ),
         t < CAMERA_FREQ
     )
