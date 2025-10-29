@@ -15,9 +15,9 @@ RT_WINDOW_FRAMES = RT_H / 100
 RT_HALF_FRAMES = max(1, int(RT_WINDOW_FRAMES / 2))  # Half reaction window (minimum 1)
 
 # Consensus thresholds (percentage of buffer that must agree)
-S_DISTANCE_CONSENSUS = 0.8
-SR_DISTANCE_CONSENSUS = 0.6
-RC_DISTANCE_CONSENSUS = 0.4
+S_DISTANCE_CONSENSUS = 0.6
+SR_DISTANCE_CONSENSUS = 0.4
+RC_DISTANCE_CONSENSUS = 0.3
 C_DISTANCE_CONSENSUS = 0.2
 CONSENSUS = 0.8
 
@@ -30,7 +30,7 @@ TH_D_STALE = 300
 TH_C_STALE = 300
 
 # Time-to-collision thresholds (seconds)
-TH_TTC_S = 4000 # Safe TTC threshold
+TH_TTC_S = 5000 # Safe TTC threshold
 TH_TTC_R = 2000 # Risky TTC threshold
 TH_TTC_C = 1000 # Critical TTC threshold
 
@@ -142,63 +142,6 @@ class PedestrianProtectionAutomaton:
     def _valid_c(self) -> bool:
         """Check if crossing data is valid (fresh or recently crossing)"""
         return self._crossing() or self.s_c < TH_C_STALE
-
-    # def _weighted_avg_ttc(self) -> float:
-    #     """Compute weighted average TTC with trend-aware and recency bias."""
-    #     if not self.B_TTC:
-    #         return float('inf')
-
-    #     # Detect approach or retreat trend
-    #     is_approaching = len(self.B_TTC) > 1 and self.B_TTC[0] < self.B_TTC[1]
-
-    #     weighted_sum = 0.0
-    #     total_weight = 0.0
-
-    #     for i, ttc in enumerate(self.B_TTC):
-    #         # Base weights depend on TTC danger level
-    #         if ttc <= TH_TTC_C:
-    #             base_w = 1.0 if is_approaching else 0.8
-    #         elif ttc <= TH_TTC_R:
-    #             base_w = 0.7 if is_approaching else 0.7
-    #         elif ttc <= TH_TTC_S:
-    #             base_w = 0.4 if is_approaching else 0.6
-    #         else:
-    #             base_w = 0.2 if is_approaching else 0.5
-
-    #         # Add recency bias (more recent = slightly more weight)
-    #         recency_factor = 1.0 + 0.1 * i
-    #         w = base_w * recency_factor
-
-    #         weighted_sum += w * ttc
-    #         total_weight += w
-
-    #     return weighted_sum / total_weight if total_weight > 0 else float('inf')
-
-
-
-    # def _s_distance(self) -> bool:
-    #     """Weighted check if distance is safe."""
-    #     avg_ttc = self._weighted_avg_ttc()
-    #     return avg_ttc > TH_TTC_S
-
-
-    # def _s_r_distance(self) -> bool:
-    #     """Weighted check if distance is safe-to-risky."""
-    #     avg_ttc = self._weighted_avg_ttc()
-    #     return TH_TTC_R < avg_ttc <= TH_TTC_S
-
-
-    # def _r_c_distance(self) -> bool:
-    #     """Weighted check if distance is risky-to-critical."""
-    #     avg_ttc = self._weighted_avg_ttc()
-    #     return TH_TTC_C < avg_ttc <= TH_TTC_R
-
-
-    # def _c_distance(self) -> bool:
-    #     """Weighted check if distance is critical."""
-    #     avg_ttc = self._weighted_avg_ttc()
-    #     return avg_ttc <= TH_TTC_C
-
     
     def _s_distance(self) -> bool:
         """Check if distance is safe (Z3-matching implementation)"""
@@ -266,7 +209,7 @@ class PedestrianProtectionAutomaton:
         inv_soft_braking = valid_c and (rc_dist or unc_dist)
         inv_emergency_braking = valid_c
 
-        G_to_normal = not valid_d or (cross and s_dist)
+        G_to_normal = not valid_d or (valid_c and s_dist)
         G_to_safe_warning = valid_d and not valid_c
         G_to_throttling = valid_c and sr_dist
         G_to_soft_braking = valid_c and rc_dist
