@@ -149,26 +149,36 @@ class PedestrianProtectionAutomaton:
         return self._crossing() or self.s_c < TH_C_STALE
 
     def _weighted_avg_ttc(self) -> float:
-        """Compute weighted average TTC value giving higher importance to low TTC."""
+        """Compute weighted average TTC with trend-aware and recency bias."""
         if not self.B_TTC:
             return float('inf')
+
+        # Detect approach or retreat trend
+        is_approaching = len(self.B_TTC) > 1 and self.B_TTC[0] < self.B_TTC[1]
 
         weighted_sum = 0.0
         total_weight = 0.0
 
-        for ttc in self.B_TTC:
+        for i, ttc in enumerate(self.B_TTC):
+            # Base weights depend on TTC danger level
             if ttc <= TH_TTC_C:
-                w = W_TTC_C
+                base_w = 1.0 if is_approaching else 0.8
             elif ttc <= TH_TTC_R:
-                w = W_TTC_RC
+                base_w = 0.7 if is_approaching else 0.7
             elif ttc <= TH_TTC_S:
-                w = W_TTC_SR
+                base_w = 0.4 if is_approaching else 0.6
             else:
-                w = W_TTC_S
+                base_w = 0.2 if is_approaching else 0.5
+
+            # Add recency bias (more recent = slightly more weight)
+            recency_factor = 1.0 + 0.1 * i
+            w = base_w * recency_factor
+
             weighted_sum += w * ttc
             total_weight += w
 
         return weighted_sum / total_weight if total_weight > 0 else float('inf')
+
 
 
     def _s_distance(self) -> bool:
