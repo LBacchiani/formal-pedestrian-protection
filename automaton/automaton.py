@@ -147,7 +147,7 @@ class PedestrianProtectionAutomaton:
         """Check if distance is safe (Z3-matching implementation)"""
         k = math.ceil(S_DISTANCE_CONSENSUS * N)
         if len(self.B_TTC) < k:
-            return True
+            return False
         count = sum(1 for i in range(k) if self.B_TTC[i] > TH_TTC_S)
         threshold = math.ceil(CONSENSUS * k)
         return count >= threshold
