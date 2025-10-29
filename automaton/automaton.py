@@ -34,11 +34,6 @@ TH_TTC_S = 4000 # Safe TTC threshold
 TH_TTC_R = 2000 # Risky TTC threshold
 TH_TTC_C = 1000 # Critical TTC threshold
 
-W_TTC_S = 0.2
-W_TTC_SR = 0.4
-W_TTC_RC = 0.7
-W_TTC_C = 1.0
-
 # Staleness upper bounds
 MAX_UNCERTAIN = 300 # Handover timeout (ms)
 
