@@ -148,96 +148,96 @@ class PedestrianProtectionAutomaton:
         """Check if crossing data is valid (fresh or recently crossing)"""
         return self._crossing() or self.s_c < TH_C_STALE
 
-    def _weighted_avg_ttc(self) -> float:
-        """Compute weighted average TTC with trend-aware and recency bias."""
-        if not self.B_TTC:
-            return float('inf')
+    # def _weighted_avg_ttc(self) -> float:
+    #     """Compute weighted average TTC with trend-aware and recency bias."""
+    #     if not self.B_TTC:
+    #         return float('inf')
 
-        # Detect approach or retreat trend
-        is_approaching = len(self.B_TTC) > 1 and self.B_TTC[0] < self.B_TTC[1]
+    #     # Detect approach or retreat trend
+    #     is_approaching = len(self.B_TTC) > 1 and self.B_TTC[0] < self.B_TTC[1]
 
-        weighted_sum = 0.0
-        total_weight = 0.0
+    #     weighted_sum = 0.0
+    #     total_weight = 0.0
 
-        for i, ttc in enumerate(self.B_TTC):
-            # Base weights depend on TTC danger level
-            if ttc <= TH_TTC_C:
-                base_w = 1.0 if is_approaching else 0.8
-            elif ttc <= TH_TTC_R:
-                base_w = 0.7 if is_approaching else 0.7
-            elif ttc <= TH_TTC_S:
-                base_w = 0.4 if is_approaching else 0.6
-            else:
-                base_w = 0.2 if is_approaching else 0.5
+    #     for i, ttc in enumerate(self.B_TTC):
+    #         # Base weights depend on TTC danger level
+    #         if ttc <= TH_TTC_C:
+    #             base_w = 1.0 if is_approaching else 0.8
+    #         elif ttc <= TH_TTC_R:
+    #             base_w = 0.7 if is_approaching else 0.7
+    #         elif ttc <= TH_TTC_S:
+    #             base_w = 0.4 if is_approaching else 0.6
+    #         else:
+    #             base_w = 0.2 if is_approaching else 0.5
 
-            # Add recency bias (more recent = slightly more weight)
-            recency_factor = 1.0 + 0.1 * i
-            w = base_w * recency_factor
+    #         # Add recency bias (more recent = slightly more weight)
+    #         recency_factor = 1.0 + 0.1 * i
+    #         w = base_w * recency_factor
 
-            weighted_sum += w * ttc
-            total_weight += w
+    #         weighted_sum += w * ttc
+    #         total_weight += w
 
-        return weighted_sum / total_weight if total_weight > 0 else float('inf')
-
-
-
-    def _s_distance(self) -> bool:
-        """Weighted check if distance is safe."""
-        avg_ttc = self._weighted_avg_ttc()
-        return avg_ttc > TH_TTC_S
+    #     return weighted_sum / total_weight if total_weight > 0 else float('inf')
 
 
-    def _s_r_distance(self) -> bool:
-        """Weighted check if distance is safe-to-risky."""
-        avg_ttc = self._weighted_avg_ttc()
-        return TH_TTC_R < avg_ttc <= TH_TTC_S
 
-
-    def _r_c_distance(self) -> bool:
-        """Weighted check if distance is risky-to-critical."""
-        avg_ttc = self._weighted_avg_ttc()
-        return TH_TTC_C < avg_ttc <= TH_TTC_R
-
-
-    def _c_distance(self) -> bool:
-        """Weighted check if distance is critical."""
-        avg_ttc = self._weighted_avg_ttc()
-        return avg_ttc <= TH_TTC_C
-
-    
     # def _s_distance(self) -> bool:
-    #     """Check if distance is safe (Z3-matching implementation)"""
-    #     if len(self.B_TTC) == 0:
-    #         return True
-    #     k = math.ceil(S_DISTANCE_CONSENSUS * N)
-    #     count = sum(1 for i in range(k) if self.B_TTC[i] > TH_TTC_S)
-    #     threshold = math.ceil(CONSENSUS * k)
-    #     return count >= threshold
-    
+    #     """Weighted check if distance is safe."""
+    #     avg_ttc = self._weighted_avg_ttc()
+    #     return avg_ttc > TH_TTC_S
+
+
     # def _s_r_distance(self) -> bool:
-    #     """Check if distance is safe-to-risky (Z3-matching implementation)"""
-    #     if len(self.B_TTC) == 0:
-    #         return False
-    #     k = math.ceil(SR_DISTANCE_CONSENSUS * N)
-    #     count = sum(1 for i in range(k) if TH_TTC_R < self.B_TTC[i] <= TH_TTC_S)
-    #     threshold = math.ceil(CONSENSUS * k)
-    #     return count >= threshold
-    
+    #     """Weighted check if distance is safe-to-risky."""
+    #     avg_ttc = self._weighted_avg_ttc()
+    #     return TH_TTC_R < avg_ttc <= TH_TTC_S
+
+
     # def _r_c_distance(self) -> bool:
-    #     """Check if distance is risky-to-critical"""
-    #     if len(self.B_TTC) == 0:
-    #         return False
-    #     k = math.ceil(RC_DISTANCE_CONSENSUS * N)
-    #     count = sum(1 for i in range(k) if TH_TTC_C < self.B_TTC[i] <= TH_TTC_R)
-    #     threshold = math.ceil(CONSENSUS * k)
-    #     return count >= threshold
-    
+    #     """Weighted check if distance is risky-to-critical."""
+    #     avg_ttc = self._weighted_avg_ttc()
+    #     return TH_TTC_C < avg_ttc <= TH_TTC_R
+
+
     # def _c_distance(self) -> bool:
-    #     """Check if distance is critical"""
-    #     if len(self.B_TTC) == 0:
-    #         return False
-    #     limit = math.ceil(C_DISTANCE_CONSENSUS * N)
-    #     return all(self.B_TTC[i] <= TH_TTC_C for i in range(limit))
+    #     """Weighted check if distance is critical."""
+    #     avg_ttc = self._weighted_avg_ttc()
+    #     return avg_ttc <= TH_TTC_C
+
+    
+    def _s_distance(self) -> bool:
+        """Check if distance is safe (Z3-matching implementation)"""
+        k = math.ceil(S_DISTANCE_CONSENSUS * N)
+        if len(self.B_TTC) < k:
+            return True
+        count = sum(1 for i in range(k) if self.B_TTC[i] > TH_TTC_S)
+        threshold = math.ceil(CONSENSUS * k)
+        return count >= threshold
+    
+    def _s_r_distance(self) -> bool:
+        """Check if distance is safe-to-risky (Z3-matching implementation)"""
+        k = math.ceil(SR_DISTANCE_CONSENSUS * N)
+        if len(self.B_TTC) < k:
+            return False
+        count = sum(1 for i in range(k) if TH_TTC_R < self.B_TTC[i] <= TH_TTC_S)
+        threshold = math.ceil(CONSENSUS * k)
+        return count >= threshold
+    
+    def _r_c_distance(self) -> bool:
+        """Check if distance is risky-to-critical"""
+        k = math.ceil(RC_DISTANCE_CONSENSUS * N)
+        if len(self.B_TTC) < k:
+            return False
+        count = sum(1 for i in range(k) if TH_TTC_C < self.B_TTC[i] <= TH_TTC_R)
+        threshold = math.ceil(CONSENSUS * k)
+        return count >= threshold
+    
+    def _c_distance(self) -> bool:
+        """Check if distance is critical"""
+        k = math.ceil(C_DISTANCE_CONSENSUS * N)
+        if len(self.B_TTC) < k:
+            return False
+        return all(self.B_TTC[i] <= TH_TTC_C for i in range(k))
     
     def _uncertain_distance(self) -> bool:
         """Check if distance classification is uncertain"""
