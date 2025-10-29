@@ -34,6 +34,11 @@ TH_TTC_S = 4000 # Safe TTC threshold
 TH_TTC_R = 2000 # Risky TTC threshold
 TH_TTC_C = 1000 # Critical TTC threshold
 
+W_TTC_S = 0.2
+W_TTC_SR = 0.4
+W_TTC_RC = 0.7
+W_TTC_C = 1.0
+
 # Staleness upper bounds
 MAX_UNCERTAIN = 300 # Handover timeout (ms)
 
@@ -142,40 +147,87 @@ class PedestrianProtectionAutomaton:
     def _valid_c(self) -> bool:
         """Check if crossing data is valid (fresh or recently crossing)"""
         return self._crossing() or self.s_c < TH_C_STALE
-    
+
+    def _weighted_avg_ttc(self) -> float:
+        """Compute weighted average TTC value giving higher importance to low TTC."""
+        if not self.B_TTC:
+            return float('inf')
+
+        weighted_sum = 0.0
+        total_weight = 0.0
+
+        for ttc in self.B_TTC:
+            if ttc <= TH_TTC_C:
+                w = W_TTC_C
+            elif ttc <= TH_TTC_R:
+                w = W_TTC_RC
+            elif ttc <= TH_TTC_S:
+                w = W_TTC_SR
+            else:
+                w = W_TTC_S
+            weighted_sum += w * ttc
+            total_weight += w
+
+        return weighted_sum / total_weight if total_weight > 0 else float('inf')
+
+
     def _s_distance(self) -> bool:
-        """Check if distance is safe (Z3-matching implementation)"""
-        if len(self.B_TTC) == 0:
-            return True
-        k = math.ceil(S_DISTANCE_CONSENSUS * N)
-        count = sum(1 for i in range(k) if self.B_TTC[i] > TH_TTC_S)
-        threshold = math.ceil(CONSENSUS * k)
-        return count >= threshold
-    
+        """Weighted check if distance is safe."""
+        avg_ttc = self._weighted_avg_ttc()
+        return avg_ttc > TH_TTC_S
+
+
     def _s_r_distance(self) -> bool:
-        """Check if distance is safe-to-risky (Z3-matching implementation)"""
-        if len(self.B_TTC) == 0:
-            return False
-        k = math.ceil(SR_DISTANCE_CONSENSUS * N)
-        count = sum(1 for i in range(k) if TH_TTC_R < self.B_TTC[i] <= TH_TTC_S)
-        threshold = math.ceil(CONSENSUS * k)
-        return count >= threshold
-    
+        """Weighted check if distance is safe-to-risky."""
+        avg_ttc = self._weighted_avg_ttc()
+        return TH_TTC_R < avg_ttc <= TH_TTC_S
+
+
     def _r_c_distance(self) -> bool:
-        """Check if distance is risky-to-critical"""
-        if len(self.B_TTC) == 0:
-            return False
-        k = math.ceil(RC_DISTANCE_CONSENSUS * N)
-        count = sum(1 for i in range(k) if TH_TTC_C < self.B_TTC[i] <= TH_TTC_R)
-        threshold = math.ceil(CONSENSUS * k)
-        return count >= threshold
-    
+        """Weighted check if distance is risky-to-critical."""
+        avg_ttc = self._weighted_avg_ttc()
+        return TH_TTC_C < avg_ttc <= TH_TTC_R
+
+
     def _c_distance(self) -> bool:
-        """Check if distance is critical"""
-        if len(self.B_TTC) == 0:
-            return False
-        limit = math.ceil(C_DISTANCE_CONSENSUS * N)
-        return all(self.B_TTC[i] <= TH_TTC_C for i in range(limit))
+        """Weighted check if distance is critical."""
+        avg_ttc = self._weighted_avg_ttc()
+        return avg_ttc <= TH_TTC_C
+
+    
+    # def _s_distance(self) -> bool:
+    #     """Check if distance is safe (Z3-matching implementation)"""
+    #     if len(self.B_TTC) == 0:
+    #         return True
+    #     k = math.ceil(S_DISTANCE_CONSENSUS * N)
+    #     count = sum(1 for i in range(k) if self.B_TTC[i] > TH_TTC_S)
+    #     threshold = math.ceil(CONSENSUS * k)
+    #     return count >= threshold
+    
+    # def _s_r_distance(self) -> bool:
+    #     """Check if distance is safe-to-risky (Z3-matching implementation)"""
+    #     if len(self.B_TTC) == 0:
+    #         return False
+    #     k = math.ceil(SR_DISTANCE_CONSENSUS * N)
+    #     count = sum(1 for i in range(k) if TH_TTC_R < self.B_TTC[i] <= TH_TTC_S)
+    #     threshold = math.ceil(CONSENSUS * k)
+    #     return count >= threshold
+    
+    # def _r_c_distance(self) -> bool:
+    #     """Check if distance is risky-to-critical"""
+    #     if len(self.B_TTC) == 0:
+    #         return False
+    #     k = math.ceil(RC_DISTANCE_CONSENSUS * N)
+    #     count = sum(1 for i in range(k) if TH_TTC_C < self.B_TTC[i] <= TH_TTC_R)
+    #     threshold = math.ceil(CONSENSUS * k)
+    #     return count >= threshold
+    
+    # def _c_distance(self) -> bool:
+    #     """Check if distance is critical"""
+    #     if len(self.B_TTC) == 0:
+    #         return False
+    #     limit = math.ceil(C_DISTANCE_CONSENSUS * N)
+    #     return all(self.B_TTC[i] <= TH_TTC_C for i in range(limit))
     
     def _uncertain_distance(self) -> bool:
         """Check if distance classification is uncertain"""
@@ -230,7 +282,7 @@ class PedestrianProtectionAutomaton:
         
         elif self.state == State.SAFE_WARNING:
             if G_to_normal:
-                return State.NORMAL, Action.REMOVE_ALERT
+                return State.NORMAL, Action.NONE
             if inv_safe_warning:
                 return State.SAFE_WARNING, Action.NONE
             if G_to_throttling:
@@ -266,7 +318,7 @@ class PedestrianProtectionAutomaton:
         
         elif self.state == State.EMERGENCY_BRAKING:
             if not valid_c:
-                return State.NORMAL, Action.NONE
+                return State.NORMAL, Action.STOP_BRAKING
             if inv_emergency_braking:
                 return State.EMERGENCY_BRAKING, Action.NONE
         
