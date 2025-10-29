@@ -38,7 +38,7 @@ def on_message(client, userdata, msg):
         ttc = data.get("ttc")                    # float seconds
         is_crossing = data.get("is_crossing")    # int {0,1}
 
-        print(f"Received data: confidence={confidence}, ttc={ttc}, is_crossing={is_crossing}")
+        # print(f"Received data: confidence={confidence}, ttc={ttc}, is_crossing={is_crossing}")
         
         # Update automaton with new data
         automaton.update_data(confidence=confidence, ttc=ttc, is_crossing=is_crossing)
@@ -47,7 +47,7 @@ def on_message(client, userdata, msg):
         action = automaton.step()
         
         # Print or handle action
-        print(f"Automaton state: {automaton.state.value}, Action: {action.value}")
+        # print(f"Automaton state: {automaton.state.value}, Action: {action.value}")
         client.publish(PUB_TOPIC, json.dumps({"action": action.value}))
 
     
