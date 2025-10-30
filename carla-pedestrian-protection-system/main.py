@@ -59,6 +59,25 @@ d_min_current = float('inf')
 d_min_records = []
 is_braking_active = False
 d_min_action = None
+is_mild_brake_active = False
+mild_brake_start_ts = 0.0
+mild_brake_start_loc = None
+speed_before_mild_brake = 0.0
+
+TH_TTC_S = 5000   # Safe
+TH_TTC_R = 2500   # Risky
+TH_TTC_C = 1500   # Critical
+
+# --- Reaction time tracking ---
+ttc_safe_start = None
+ttc_risky_start = None
+ttc_critical_start = None
+reaction_times = {
+    "mild_brake": [],
+    "brake": [],
+    "emergency_brake": []
+}
+ttc_lock = threading.Lock()
 
 brake_start_loc = None
 speed_before_brake = 0.0
@@ -134,7 +153,7 @@ client.set_timeout(10.0)
 world = client.get_world()
 spectator = world.get_spectator()
 
-PEDESTRIAN = "RANDOM"  # DET || "RANDOM"  
+PEDESTRIAN = "DET"  # DET || "RANDOM"  
 
 weather = carla.WeatherParameters(
     cloudiness=0.0
@@ -184,7 +203,13 @@ metrics = {
         "binary": 0,          
         "events": []         
     },
-    "d_min_records": []
+    "d_min_records": [],
+    "mild_brake": [],
+    "reaction_times": {
+        "mild_brake": [],
+        "brake": [],
+        "emergency_brake": []
+    },
 }
 
 if MODE == Mode.STEERING_WHEEL:
@@ -405,8 +430,13 @@ def get_current_action():
         return current_action
 
 def process_image():
-    global input_rgb_image, input_depth_image, processed_output, velocity, d_min_current, d_min_records, is_braking_active, d_min_action, brake_start_loc, speed_before_brake
-
+    global input_rgb_image, input_depth_image, processed_output, velocity
+    global d_min_current, d_min_records, is_braking_active, d_min_action
+    global brake_start_loc, speed_before_brake
+    global is_mild_brake_active, mild_brake_start_ts, mild_brake_start_loc, speed_before_mild_brake
+    global ttc_safe_start, ttc_risky_start, ttc_critical_start
+    global metrics
+    
     last_inference_time = 0.0
     target_dt = 0.105  # 10Hz
     crossing = 0
@@ -458,6 +488,26 @@ def process_image():
         closest_ped = min(detected_pedestrians, key=lambda p: p.distance) if detected_pedestrians else None
         conf = closest_ped.confidence if closest_ped else 0.0
 
+        with ttc_lock:
+            # === Log reaction times when state changes ===
+            if local_action == "mild_brake" and ttc_safe_start is not None:
+                reaction_time = time.time() - ttc_safe_start
+                reaction_times["mild_brake"].append(reaction_time)
+                metrics["reaction_times"]["mild_brake"].append(reaction_time)
+                ttc_safe_start = None  # reset
+
+            elif local_action == "brake" and ttc_risky_start is not None:
+                reaction_time = time.time() - ttc_risky_start
+                reaction_times["brake"].append(reaction_time)
+                metrics["reaction_times"]["brake"].append(reaction_time)
+                ttc_risky_start = None  # reset
+
+            elif local_action == "emergency_brake" and ttc_critical_start is not None:
+                reaction_time = time.time() - ttc_critical_start
+                reaction_times["emergency_brake"].append(reaction_time)
+                metrics["reaction_times"]["emergency_brake"].append(reaction_time)
+                ttc_critical_start = None  # reset
+
         if closest_ped:
             yaw_rad = closest_ped.yaw
             ttc_camera = closest_ped.time_to_collision
@@ -482,6 +532,15 @@ def process_image():
             "ttc": ttc_camera if conf else 10000,
             "is_crossing": crossing if conf else 0
         }
+
+        with ttc_lock:
+            if ttc_camera and ttc_camera < float('inf'):
+                if ttc_camera < TH_TTC_S and ttc_safe_start is None:
+                    ttc_safe_start = time.time()
+                if ttc_camera < TH_TTC_R and ttc_risky_start is None:
+                    ttc_risky_start = time.time()
+                if ttc_camera < TH_TTC_C and ttc_critical_start is None:
+                    ttc_critical_start = time.time()
 
         send_mqtt_async(payload)
 
@@ -515,6 +574,31 @@ def process_image():
             stopping_distance = None
             speed_before_brake = 0.0
 
+        # --- Mild Brake logging (not emergency, just release of throttle) ---
+        if local_action == "mild_brake":
+            if not is_mild_brake_active:
+                is_mild_brake_active = True
+                mild_brake_start_ts = time.time()
+                mild_brake_start_loc = vehicle.get_location()
+                speed_before_mild_brake = velocity
+        else:
+            if is_mild_brake_active:
+                # Mild brake has just ended
+                stop_loc = vehicle.get_location()
+                distance_travelled = mild_brake_start_loc.distance(stop_loc) if mild_brake_start_loc and stop_loc else None
+                duration = time.time() - mild_brake_start_ts
+
+                metrics["mild_brake"].append({
+                    "timestamp": time.time(),
+                    "speed_before_mild_brake": speed_before_mild_brake,
+                    "duration": duration,
+                    "distance_travelled": distance_travelled
+                })
+
+                is_mild_brake_active = False
+                mild_brake_start_ts = 0.0
+                mild_brake_start_loc = None
+                speed_before_mild_brake = 0.0
         with processed_output_lock:
             processed_output = {
                 "rgb_image": rgb_array,
@@ -834,6 +918,7 @@ def _append_metrics_to_file():
     try:
         metrics["ended_at"] = metrics.get("ended_at") or time.time()
         metrics["d_min_records"] = d_min_records
+        metrics["reaction_times"] = reaction_times
         payload = json.dumps(metrics, ensure_ascii=False)
         with open(METRICS_PATH, "a", encoding="utf-8") as f:
             f.write(payload + "\n")
