@@ -17,7 +17,6 @@ def load_brake_data():
             except json.JSONDecodeError:
                 pass
 
-    # Flatten d_min_records and mild_brake_records if present
     brake_records = []
     for r in records:
         scenario_type = "DAY" if r["scenario"]["weather"]["sun_altitude_angle"] >= 0 else "NIGHT"
@@ -52,13 +51,11 @@ def load_brake_data():
     return df
 
 
-# === Conteggio azioni di frenata ===
 def plot_brake_counts(df):
     """Bar chart for number of mild_brake, brake, and emergency_brake events."""
     counts = df["action"].value_counts().reset_index()
     counts.columns = ["action", "count"]
 
-    # Imposta l’ordine desiderato
     order = ["mild_brake", "brake", "emergency_brake"]
 
     sns.set_style("whitegrid")
@@ -67,9 +64,12 @@ def plot_brake_counts(df):
         data=counts,
         x="action",
         y="count",
+        hue="action",
         order=order,
-        palette="coolwarm"
+        palette="coolwarm",
+        legend=False
     )
+
     ax.set_title("Number of Brake Events by Type")
     ax.set_xlabel("Action Type")
     ax.set_ylabel("Count")
@@ -78,20 +78,17 @@ def plot_brake_counts(df):
 
 
 
-# ===  Distanze nel tempo ===
 def plot_box_by_run(df):
     """
     Boxplot of braking distances (merged brake + emergency_brake)
-    grouped by simulation run.
+    grouped by simulation run, labeled as Run 1, Run 2, etc.
     """
-    # Filtra solo brake + emergency_brake
     df_box = df[df["action"].isin(["brake", "emergency_brake"])].copy()
     df_box = df_box[df_box["d_min"].notnull()]
     if df_box.empty:
         print("No braking distance data found for brake/emergency_brake.")
         return
 
-    # Ordina le run in base al tempo medio per avere X più leggibile
     run_order = (
         df_box.groupby("run_id")["timestamp"]
         .mean()
@@ -99,22 +96,24 @@ def plot_box_by_run(df):
         .index.tolist()
     )
 
+    run_labels = {rid: f"Run {i+1}" for i, rid in enumerate(run_order)}
+    df_box["run_label"] = df_box["run_id"].map(run_labels)
+
     sns.set_style("whitegrid")
     plt.figure(figsize=(max(8, len(run_order) * 0.6), 5))
     ax = sns.boxplot(
         data=df_box,
-        x="run_id",
+        x="run_label",
         y="d_min",
-        order=run_order,
-        color="#4C72B0",   # blu coerente
+        order=[f"Run {i+1}" for i in range(len(run_order))],
+        color="#4C72B0",
         width=0.6
     )
 
-    # Calcola la media per ciascuna run e aggiungi overlay
     mean_dmin = (
-        df_box.groupby("run_id")["d_min"]
+        df_box.groupby("run_label")["d_min"]
         .mean()
-        .reindex(run_order)
+        .reindex([f"Run {i+1}" for i in range(len(run_order))])
         .values
     )
     plt.scatter(
@@ -126,24 +125,17 @@ def plot_box_by_run(df):
         label="Mean per run"
     )
 
-    # Linea di sicurezza a 1 metro
     plt.axhline(MIN_DIST, color="red", linestyle="--", label=f"{MIN_DIST}m threshold")
 
     plt.title("Braking Distance Distribution per Run (Brake + Emergency)")
-    plt.xlabel("Simulation Run ID")
+    plt.xlabel("Simulation Run")
     plt.ylabel("Minimum Distance (m)")
-
-    # Abbrevia run_id
-    ax.set_xticklabels([rid[:6] for rid in run_order], rotation=45, ha="right")
 
     plt.legend(loc="upper right")
     plt.tight_layout()
     plt.show()
 
 
-
-
-# ===  Stopping distance vs speed ===
 def plot_stopdist_vs_speed(df):
     """Scatter plot showing how stopping distance relates to initial speed."""
     df_filtered = df[df["stopping_distance"].notnull() & df["speed_before_brake"].notnull()]
@@ -169,7 +161,6 @@ def plot_stopdist_vs_speed(df):
     plt.show()
 
 
-# === (Extra) Boxplot per scenario ===
 def plot_box_by_scenario(df):
     """Boxplot of d_min grouped by scenario type and action."""
     df_filtered = df[df["d_min"].notnull()]
@@ -188,6 +179,92 @@ def plot_box_by_scenario(df):
     plt.tight_layout()
     plt.show()
 
+def plot_reaction_times():
+    """
+    Extract and visualize average reaction times by brake type and scenario (DAY/NIGHT).
+    Removes outliers > 1s and shows mean ± std.
+    """
+    records = []
+    with open(METRICS_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                r = json.loads(line.strip())
+            except json.JSONDecodeError:
+                continue
+
+            scenario_type = "DAY" if r["scenario"]["weather"]["sun_altitude_angle"] >= 0 else "NIGHT"
+            reaction_data = r.get("reaction_times", {})
+            if not reaction_data:
+                continue
+
+            for action, times in reaction_data.items():
+                for t in times:
+                    if t is None or not isinstance(t, (int, float)):
+                        continue
+                    if t > 1.0:
+                        continue
+                    records.append({
+                        "run_id": r["run_id"],
+                        "scenario_type": scenario_type,
+                        "action": action,
+                        "reaction_time": t
+                    })
+
+    if not records:
+        print("No valid reaction time data found.")
+        return
+
+    df_react = pd.DataFrame(records)
+
+    df_stats = (
+        df_react.groupby(["scenario_type", "action"])["reaction_time"]
+        .agg(["mean", "std", "count"])
+        .reset_index()
+    )
+
+    order_actions = ["mild_brake", "brake", "emergency_brake"]
+    df_stats["action"] = pd.Categorical(df_stats["action"], categories=order_actions, ordered=True)
+
+    sns.set_style("whitegrid")
+    plt.figure(figsize=(7, 4))
+    ax = sns.barplot(
+        data=df_stats,
+        x="action",
+        y="mean",
+        hue="scenario_type",
+        palette="coolwarm",
+        order=order_actions,
+        capsize=0.15
+    )
+
+    for i, row in df_stats.iterrows():
+        x_offset = order_actions.index(row["action"]) + (-0.2 if row["scenario_type"] == "DAY" else 0.2)
+        ax.errorbar(
+            x=x_offset,
+            y=row["mean"],
+            yerr=row["std"],
+            fmt="none",
+            ecolor="black",
+            capsize=4,
+            elinewidth=1.2
+        )
+
+    for container in ax.containers:
+        if hasattr(container, "datavalues"):
+            ax.bar_label(container, fmt="%.3fs", label_type="edge", fontsize=8)
+
+    plt.title("Average Reaction Times by Brake Type and Scenario")
+    plt.xlabel("Brake Type")
+    plt.ylabel("Mean Reaction Time (s)")
+    plt.legend(title="Scenario", loc="upper right")
+    plt.tight_layout()
+    plt.show()
+
+    print("\n=== Mean Reaction Times (cleaned, ≤1s) ===")
+    print(df_stats.to_string(index=False, float_format="%.3f"))
+
+
+
 
 if __name__ == "__main__":
     df = load_brake_data()
@@ -196,3 +273,4 @@ if __name__ == "__main__":
     plot_box_by_run(df)
     plot_stopdist_vs_speed(df)
     plot_box_by_scenario(df)
+    plot_reaction_times()
