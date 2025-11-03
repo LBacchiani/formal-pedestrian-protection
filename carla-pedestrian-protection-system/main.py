@@ -546,11 +546,11 @@ def process_image():
                     ttc_critical_start = time.time()
                     ttc_safe_start = None
                     ttc_risky_start = None
-                elif ttc_camera < TH_TTC_R and ttc_risky_start is None:
+                elif ttc_camera < TH_TTC_R and ttc_risky_start is None and ttc_critical_start is None:
                     ttc_risky_start = time.time()
                     ttc_safe_start = None
                     ttc_critical_start = None
-                elif ttc_camera < TH_TTC_S and ttc_safe_start is None:
+                elif ttc_camera < TH_TTC_S and ttc_safe_start is None and ttc_risky_start is None and ttc_critical_start is None:
                     ttc_safe_start = time.time()
                     ttc_critical_start = None
                     ttc_risky_start = None
