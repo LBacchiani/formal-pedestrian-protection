@@ -613,8 +613,8 @@ def process_image():
                 "depth_image": depth_array,
                 "detections": detections
             }
-
-        prev_action = local_action
+        with ttc_lock:
+            prev_action = local_action
 
 class GameLoop(object):
     def __init__(self, args):
