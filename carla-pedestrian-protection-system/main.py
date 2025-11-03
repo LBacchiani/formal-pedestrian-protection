@@ -66,7 +66,7 @@ speed_before_mild_brake = 0.0
 
 TH_TTC_S = 5000   # Safe
 TH_TTC_R = 2500   # Risky
-TH_TTC_C = 1500   # Critical
+TH_TTC_C = 1000   # Critical
 
 # --- Reaction time tracking ---
 ttc_safe_start = None
@@ -78,6 +78,8 @@ reaction_times = {
     "emergency_brake": []
 }
 ttc_lock = threading.Lock()
+
+prev_action = "normal"
 
 brake_start_loc = None
 speed_before_brake = 0.0
@@ -435,7 +437,7 @@ def process_image():
     global brake_start_loc, speed_before_brake
     global is_mild_brake_active, mild_brake_start_ts, mild_brake_start_loc, speed_before_mild_brake
     global ttc_safe_start, ttc_risky_start, ttc_critical_start
-    global metrics
+    global metrics, prev_action
     
     last_inference_time = 0.0
     target_dt = 0.105  # 10Hz
@@ -490,19 +492,19 @@ def process_image():
 
         with ttc_lock:
             # === Log reaction times when state changes ===
-            if local_action == "mild_brake" and ttc_safe_start is not None:
+            if local_action == "mild_brake" and ttc_safe_start is not None and prev_action != current_action:
                 reaction_time = time.time() - ttc_safe_start
                 reaction_times["mild_brake"].append(reaction_time)
                 metrics["reaction_times"]["mild_brake"].append(reaction_time)
                 ttc_safe_start = None  # reset
 
-            elif local_action == "brake" and ttc_risky_start is not None:
+            elif local_action == "brake" and ttc_risky_start is not None and prev_action != current_action:
                 reaction_time = time.time() - ttc_risky_start
                 reaction_times["brake"].append(reaction_time)
                 metrics["reaction_times"]["brake"].append(reaction_time)
                 ttc_risky_start = None  # reset
 
-            elif local_action == "emergency_brake" and ttc_critical_start is not None:
+            elif local_action == "emergency_brake" and ttc_critical_start is not None and prev_action != current_action:
                 reaction_time = time.time() - ttc_critical_start
                 reaction_times["emergency_brake"].append(reaction_time)
                 metrics["reaction_times"]["emergency_brake"].append(reaction_time)
@@ -535,12 +537,18 @@ def process_image():
 
         with ttc_lock:
             if ttc_camera and ttc_camera < float('inf'):
-                if ttc_camera < TH_TTC_S and ttc_safe_start is None:
-                    ttc_safe_start = time.time()
-                if ttc_camera < TH_TTC_R and ttc_risky_start is None:
-                    ttc_risky_start = time.time()
                 if ttc_camera < TH_TTC_C and ttc_critical_start is None:
                     ttc_critical_start = time.time()
+                    ttc_safe_start = None
+                    ttc_risky_start = None
+                elif ttc_camera < TH_TTC_R and ttc_risky_start is None:
+                    ttc_risky_start = time.time()
+                    ttc_safe_start = None
+                    ttc_critical_start = None
+                elif ttc_camera < TH_TTC_S and ttc_safe_start is None:
+                    ttc_safe_start = time.time()
+                    ttc_critical_start = None
+                    ttc_risky_start = None
 
         send_mqtt_async(payload)
 
@@ -605,6 +613,8 @@ def process_image():
                 "depth_image": depth_array,
                 "detections": detections
             }
+
+        prev_action = local_action
 
 class GameLoop(object):
     def __init__(self, args):
