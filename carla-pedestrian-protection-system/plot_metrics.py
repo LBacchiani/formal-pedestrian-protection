@@ -141,17 +141,20 @@ def plot_box_by_run(df):
 
 
 def plot_stopdist_vs_speed(df):
-    """Scatter plot showing how stopping distance relates to initial speed."""
-    df_filtered = df[df["stopping_distance"].notnull() & df["speed_before_brake"].notnull()]
+    """Scatter plot showing how stopping distance relates to initial speed (in km/h)."""
+    df_filtered = df[df["stopping_distance"].notnull() & df["speed_before_brake"].notnull()].copy()
     if df_filtered.empty:
         print("No stopping distance data found.")
         return
+
+    # Convert speed from m/s to km/h
+    df_filtered["speed_before_brake_kmh"] = df_filtered["speed_before_brake"] * 3.6
 
     sns.set_style("whitegrid")
     plt.figure(figsize=(6, 4))
     sns.scatterplot(
         data=df_filtered,
-        x="speed_before_brake",
+        x="speed_before_brake_kmh",
         y="stopping_distance",
         hue="action",
         style="scenario_type",
@@ -159,7 +162,7 @@ def plot_stopdist_vs_speed(df):
         s=60
     )
     plt.title("Stopping Distance vs. Speed Before Brake")
-    plt.xlabel("Speed before brake (m/s)")
+    plt.xlabel("Speed before brake (km/h)")
     plt.ylabel("Stopping distance (m)")
     plt.tight_layout()
     plt.show()
