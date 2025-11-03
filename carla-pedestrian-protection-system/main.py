@@ -491,8 +491,18 @@ def process_image():
         conf = closest_ped.confidence if closest_ped else 0.0
 
         with ttc_lock:
+            if local_action == "brake":
+                print(ttc_risky_start)
+                print(prev_action)
+                print(current_action)
+
             if local_action == "emergency_brake":
                 print(ttc_critical_start)
+                print(prev_action)
+                print(current_action)
+
+            if local_action == "mild_brake":
+                print(ttc_safe_start)
                 print(prev_action)
                 print(current_action)
 
