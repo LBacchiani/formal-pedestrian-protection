@@ -491,6 +491,11 @@ def process_image():
         conf = closest_ped.confidence if closest_ped else 0.0
 
         with ttc_lock:
+            if local_action == "emergency_brake":
+                print(ttc_critical_start)
+                print(prev_action)
+                print(current_action)
+
             # === Log reaction times when state changes ===
             if local_action == "mild_brake" and ttc_safe_start is not None and prev_action != current_action:
                 reaction_time = time.time() - ttc_safe_start
