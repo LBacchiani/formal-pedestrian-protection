@@ -5,7 +5,7 @@ import seaborn as sns
 
 METRICS_PATH = "metrics_log.jsonl"
 
-MIN_DIST = 3.0
+MIN_DIST = 2.0
 
 def load_brake_data():
     """Load all braking records (including mild brakes) from the metrics log."""
