@@ -52,9 +52,10 @@ def load_brake_data():
 
 
 def plot_brake_counts(df):
-    """Bar chart for number of mild_brake, brake, and emergency_brake events."""
+    """Bar chart for percentage of mild_brake, brake, and emergency_brake events."""
     counts = df["action"].value_counts().reset_index()
     counts.columns = ["action", "count"]
+    counts["percent"] = 100 * counts["count"] / counts["count"].sum()
 
     order = ["mild_brake", "brake", "emergency_brake"]
 
@@ -63,19 +64,22 @@ def plot_brake_counts(df):
     ax = sns.barplot(
         data=counts,
         x="action",
-        y="count",
+        y="percent",
         hue="action",
         order=order,
         palette="coolwarm",
         legend=False
     )
 
-    ax.set_title("Number of Brake Events by Type")
+    # Etichette percentuali sopra le barre
+    for container in ax.containers:
+        ax.bar_label(container, fmt="%.1f%%", label_type="edge", fontsize=9, padding=2)
+
+    ax.set_title("Brake Events by Type (Percentage)")
     ax.set_xlabel("Action Type")
-    ax.set_ylabel("Count")
+    ax.set_ylabel("Percentage of Events (%)")
     plt.tight_layout()
     plt.show()
-
 
 
 def plot_box_by_run(df):
