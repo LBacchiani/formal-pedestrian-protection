@@ -34,7 +34,7 @@ class Mode(Enum):
     KEYBOARD = 1
     STEERING_WHEEL = 2
 
-MODE = Mode.STEERING_WHEEL
+MODE = Mode.KEYBOARD
 NUM_WALKERS = 75
 
 BROKER = "localhost"
@@ -72,6 +72,11 @@ TH_TTC_C = 1000   # Critical
 ttc_safe_start = None
 ttc_risky_start = None
 ttc_critical_start = None
+
+mild_brake_active = False
+brake_active = False
+emergency_brake_active = False
+
 reaction_times = {
     "mild_brake": [],
     "brake": [],
@@ -551,19 +556,26 @@ def process_image():
         }
 
         with ttc_lock:
+            if ttc_camera and ttc_camera > TH_TTC_S:
+                emergency_brake_active = False
+                brake_active = False
+                mild_brake_active = False
             if ttc_camera and ttc_camera < float('inf'):
-                if ttc_camera < TH_TTC_C and ttc_critical_start is None:
+                if ttc_camera < TH_TTC_C and ttc_critical_start is None and not emergency_brake_active:
                     ttc_critical_start = time.time()
                     ttc_safe_start = None
                     ttc_risky_start = None
-                elif ttc_camera < TH_TTC_R and ttc_risky_start is None and ttc_critical_start is None:
+                    emergency_brake_active = True
+                elif ttc_camera < TH_TTC_R and ttc_risky_start is None and ttc_critical_start is None and not brake_active:
                     ttc_risky_start = time.time()
                     ttc_safe_start = None
                     ttc_critical_start = None
-                elif ttc_camera < TH_TTC_S and ttc_safe_start is None and ttc_risky_start is None and ttc_critical_start is None:
+                    brake_active = True
+                elif ttc_camera < TH_TTC_S and ttc_safe_start is None and ttc_risky_start is None and ttc_critical_start is None and not mild_brake_active:
                     ttc_safe_start = time.time()
                     ttc_critical_start = None
                     ttc_risky_start = None
+                    mild_brake_active = True
 
         send_mqtt_async(payload)
 
