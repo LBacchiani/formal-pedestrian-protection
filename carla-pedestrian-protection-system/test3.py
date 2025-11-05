@@ -70,14 +70,12 @@ TH_TTC_S = 5000   # Safe
 TH_TTC_R = 2500   # Risky
 TH_TTC_C = 1000   # Critical
 
-# --- Reaction time tracking ---
 ttc_safe_start = None
 ttc_risky_start = None
 ttc_critical_start = None
 
-# --- CONTROL ARBITER (AGENT vs ADAS) ---
-CONTROL_LOCK_SECS = 1.0   # finestra minima di blocco quando ADAS è attivo
-control_mode = "AGENT"    # "AGENT" oppure "ADAS"
+CONTROL_LOCK_SECS = 1.0  
+control_mode = "AGENT"  
 override_release_time = 0.0
 
 mild_brake_active = False
@@ -96,13 +94,16 @@ prev_action = "normal"
 brake_start_loc = None
 speed_before_brake = 0.0
 
+SIM_RUNNING = True
+
+
 mqtt_client = mqtt.Client()
 mqtt_queue = queue.Queue(maxsize=50)
 mqtt_lock = threading.Lock()
 
 if not os.path.exists(METRICS_PATH):
     with open(METRICS_PATH, "w", encoding="utf-8") as f:
-        f.write("")  # crea file vuoto se non esiste
+        f.write("")
 try:
     mqtt_client.connect(BROKER, PORT, 60)
     mqtt_client.loop_start()
@@ -111,9 +112,6 @@ except Exception as e:
     print("[MQTT] Connection failed:", e)
 
 def on_mqtt_message(client, userdata, msg):
-    """Callback chiamata dal thread interno MQTT.
-    Non elabora nulla: mette solo il messaggio in coda.
-    """
     try:
         mqtt_queue.put_nowait(msg.payload)
     except queue.Full:
@@ -236,6 +234,41 @@ def disable_traffic_lights(world: carla.World):
         tl.freeze(True)
         tl.set_state(carla.TrafficLightState.Green)
         tl.set_green_time(99999)
+
+def spawn_single_walker(world: carla.World, location: carla.Location):
+    bp_lib = world.get_blueprint_library()
+    
+    # Seleziona sempre il pedone con ID fisso
+    walker_bp = bp_lib.find('walker.pedestrian.0042')
+    if walker_bp is None:
+        raise RuntimeError("Blueprint 'walker.pedestrian.0041' non trovata!")
+
+    # Configura attributi
+    if walker_bp.has_attribute('is_invincible'):
+        walker_bp.set_attribute('is_invincible', 'false')
+    if walker_bp.has_attribute('speed'):
+        walker_bp.set_attribute('speed', '1.3')
+
+    # Crea il pedone
+    trans = carla.Transform(location, carla.Rotation(yaw=0))
+    walker = world.try_spawn_actor(walker_bp, trans)
+    if walker is None:
+        raise RuntimeError("Error")
+
+    # Crea il controller AI
+    controller_bp = bp_lib.find('controller.ai.walker')
+    controller = world.try_spawn_actor(controller_bp, carla.Transform(), walker)
+    if controller is not None:
+        controller.start()
+        controller.set_max_speed(1.3)
+
+    return walker, controller
+
+
+def walker_go_to(world: carla.World, controller, target_loc: carla.Location):
+    if controller is None:
+        return
+    controller.go_to_location(target_loc)
 
 def remove_all(world: carla.World):
     for a in world.get_actors().filter('vehicle.*'):
@@ -381,7 +414,6 @@ def process_image():
                 print(prev_action)
                 print(current_action)
 
-            # === Log reaction times when state changes ===
             if local_action == "mild_brake" and ttc_safe_start is not None and prev_action != current_action:
                 reaction_time = time.time() - ttc_safe_start
                 reaction_times["mild_brake"].append(reaction_time)
@@ -479,7 +511,6 @@ def process_image():
             stopping_distance = None
             speed_before_brake = 0.0
 
-        # --- Mild Brake logging (not emergency, just release of throttle) ---
         if local_action == "mild_brake":
             if not is_mild_brake_active:
                 is_mild_brake_active = True
@@ -488,7 +519,6 @@ def process_image():
                 speed_before_mild_brake = velocity
         else:
             if is_mild_brake_active:
-                # Mild brake has just ended
                 stop_loc = vehicle.get_location()
                 distance_travelled = mild_brake_start_loc.distance(stop_loc) if mild_brake_start_loc and stop_loc else None
                 duration = time.time() - mild_brake_start_ts
@@ -514,7 +544,6 @@ def process_image():
             prev_action = local_action
 
 def adas_active(action: str) -> bool:
-    # Considera "warning" come safe: l'agente può guidare.
     return action not in ("normal", "warning")
 
 class GameLoop(object):
@@ -571,14 +600,12 @@ class GameLoop(object):
 
     def start(self):
         global vehicle, actor_agent, control_mode, override_release_time
-        # Disattiva autopilot di CARLA, useremo il BasicAgent
         self.world.player.set_autopilot(False)
         try:
             clock = pygame.time.Clock()
             global current_action
 
             while True:
-                # --- Tick sincronizzato ---
                 if self.args.sync:
                     self.sim_world.tick()
                 clock.tick_busy_loop(self.fps)
@@ -587,7 +614,6 @@ class GameLoop(object):
                     local_action = current_action
                     local_level_brk = level_brk
 
-                # --- Aggiorna display ---
                 try:
                     ready = False
                     with processed_output_lock:
@@ -601,14 +627,12 @@ class GameLoop(object):
                             ready = True
 
                     if ready:
-                        # RGB
                         bgr_for_display = (
                             cv2.cvtColor(rgb_arr[:, :, :3], cv2.COLOR_RGB2BGR)
                             if rgb_arr is not None and rgb_arr.ndim == 3 and rgb_arr.shape[2] >= 3
                             else None
                         )
 
-                        # DEPTH
                         if depth_arr is not None and depth_arr.ndim == 3 and depth_arr.shape[2] >= 4:
                             rgb = depth_arr[:, :, :3].astype(np.uint32)
                             r, g, b = rgb[:, :, 2], rgb[:, :, 1], rgb[:, :, 0]
@@ -617,7 +641,6 @@ class GameLoop(object):
                             depth_vis = (255 * (1.0 - depth_m / 50.0)).astype(np.uint8)
                             depth_for_display = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
 
-                            # Aggiunge legenda
                             h, _, _ = depth_for_display.shape
                             legend_h, legend_w = h, 40
                             legend = np.linspace(255, 0, legend_h).astype(np.uint8)
@@ -631,7 +654,6 @@ class GameLoop(object):
                         else:
                             depth_for_display = None
 
-                        # Disegna bounding box pedoni
                         if bgr_for_display is not None and dets:
                             for _, bbox, _ in dets:
                                 cv2.rectangle(
@@ -656,10 +678,8 @@ class GameLoop(object):
                 except Exception as e:
                     print(f"[DISPLAY] Error updating OpenCV windows: {e}")
 
-                # --- AUTOPILOTA + ADAS MERGE ---
                 now_ts = time.time()
 
-                # Update stato dell'arbitro con hysteresis temporale
                 if control_mode == "AGENT":
                     if adas_active(local_action):
                         control_mode = "ADAS"
@@ -667,14 +687,11 @@ class GameLoop(object):
 
                 elif control_mode == "ADAS":
                     if adas_active(local_action):
-                        # ADAS ancora attivo: estendi il blocco
                         override_release_time = now_ts + CONTROL_LOCK_SECS
                     else:
-                        # ADAS non attivo: rilascia solo se è scaduta la finestra
                         if now_ts >= override_release_time:
                             control_mode = "AGENT"
 
-                # Applica il controllo in base al control_mode
                 if control_mode == "AGENT":
                     autopilot_control = actor_agent.run_step()
                     control = carla.VehicleControl(
@@ -688,9 +705,7 @@ class GameLoop(object):
                     )
 
                 else:
-                    # CONTROLLO ADAS: ignora completamente l'agente
                     control = carla.VehicleControl()
-                    # mantieni lo sterzo corrente per evitare jerk improvvisi
                     control.steer = vehicle.get_control().steer
                     control.throttle = 0.0
 
@@ -699,12 +714,10 @@ class GameLoop(object):
                     elif local_action == "brake":
                         control.brake = float(local_level_brk)
                     elif local_action == "mild_brake":
-                        control.brake = 0.0  # solo lift-off
+                        control.brake = 0.0
 
-                # Applica il controllo risultante
                 vehicle.apply_control(control)
 
-                # Render HUD e GUI
                 self.render(clock)
 
         finally:
@@ -777,7 +790,6 @@ def setup(vehicle):
     log_level = mc.logging.DEBUG if args.debug else mc.logging.INFO
     mc.logging.basicConfig(format='%(levelname)s: %(message)s', level=log_level)
     mc.logging.info('listening to server %s:%s', args.host, args.port)
-
     return GameLoop(args, vehicle=vehicle)
 
 
@@ -859,76 +871,84 @@ def _graceful_exit_handler(signum=None, frame=None):
 
     sys.exit(0)
 
-# ===========================
-# === SCENARIO PRINCIPALE ===
-# ===========================
-
-# Pulisce la scena da precedenti run
 remove_all(world)
 world.tick()
-
-# Congela tutti i semafori sul verde
 for tl in world.get_actors().filter('traffic.traffic_light'):
     tl.freeze(True)
     tl.set_state(carla.TrafficLightState.Green)
     tl.set_green_time(99999)
 
-# === Definizione coordinate scenario ===
 start = carla.Location(x=-41.5, y=80.0, z=1.0)
-destination = carla.Location(x=-41.5, y=10.0, z=1.0)
-pedestrian_position = carla.Location(x=-41.5, y=37.0, z=1.0)
+destination = carla.Location(x=-41.5, y=0.0, z=1.0)
 
-# === Setup gioco e mondo ===
-
-
-# === Veicolo ===
-# === Usa il veicolo creato da manual_control ===
 bp_lib = world.get_blueprint_library()
 vehicle_bp = bp_lib.find('vehicle.mercedes.coupe_2020')
 vehicle = world.try_spawn_actor(vehicle_bp, carla.Transform(start, carla.Rotation(yaw=-90)))
 world.tick()
 
 game_loop = setup(vehicle)
-
-
-# Setup camera RGB + Depth
 rgb_camera, depth_camera = setup_camera(vehicle)
 
-# === Autopilota (BasicAgent) ===
 actor_agent = BasicAgent(vehicle)
 actor_agent.set_destination(destination)
 actor_agent.set_target_speed(30)  # km/h
 actor_agent.ignore_vehicles(True)
 actor_agent.ignore_stop_signs(True)
 
-# === Pedone singolo ===
+pedestrian_start = carla.Location(x=-52.0, y=36.0, z=1.0) 
+
 bp_lib = world.get_blueprint_library()
 walker_bp = bp_lib.find('walker.pedestrian.0042')
+
 if walker_bp.has_attribute('is_invincible'):
     walker_bp.set_attribute('is_invincible', 'false')
-if walker_bp.has_attribute('speed'):
-    walker_bp.set_attribute('speed', '1.3')
 
-walker = world.try_spawn_actor(walker_bp, carla.Transform(pedestrian_position, carla.Rotation(yaw=0)))
-controller_bp = bp_lib.find('controller.ai.walker')
-walker_controller = world.try_spawn_actor(controller_bp, carla.Transform(), walker)
-if walker_controller:
-    walker_controller.start()
-    walker_controller.set_max_speed(1.3)
-    # facoltativo: pedone attraversa lentamente
-    target_cross = carla.Location(x=pedestrian_position.x, y=pedestrian_position.y - 6.0, z=pedestrian_position.z)
-    walker_controller.go_to_location(target_cross)
+walker_transform = carla.Transform(pedestrian_start, carla.Rotation(yaw=0))
+walker = world.try_spawn_actor(walker_bp, walker_transform)
 
-# === Collision Sensor ===
+if walker:
+
+    world.tick()
+    time.sleep(0.2)
+    real_start = walker.get_location()
+    def pedestrian_control(x=1, y=0, z=0):
+        ctrl = carla.WalkerControl()
+        ctrl.speed = 1.3  # m/s
+        ctrl.direction = carla.Vector3D(x, y, z)
+        return ctrl
+
+    def stop_pedestrian(walker):
+        ctrl = carla.WalkerControl()
+        ctrl.speed = 0.0
+        walker.apply_control(ctrl)
+
+    def _move_pedestrian(world, walker, ctrl, max_distance=20.0):
+        start_loc = walker.get_location()
+        while True:
+            walker.apply_control(ctrl)
+            world.tick()
+            time.sleep(0.05)
+
+            current = walker.get_location()
+            dist = current.distance(start_loc)
+
+            if dist >= max_distance:
+                stop_pedestrian(walker)
+                break
+
+    def move_pedestrian(world, walker):
+        ctrl = pedestrian_control(1, 0, 0)
+        threading.Thread(target=_move_pedestrian, args=(world, walker, ctrl), daemon=True).start()
+
+    move_pedestrian(world, walker)
+
 collision_bp = bp_lib.find('sensor.other.collision')
 collision_sensor = world.spawn_actor(collision_bp, carla.Transform(), attach_to=vehicle)
 collision_sensor.listen(lambda event: collision_callback(event))
 
-# === Camera listeners ===
 rgb_camera.listen(lambda image: rgb_camera_callback(image))
 depth_camera.listen(lambda image: depth_camera_callback(image))
 
-# === Signal & Exit Handling ===
 atexit.register(_graceful_exit_handler)
 for _sig in (signal.SIGINT, signal.SIGTERM):
     try:
@@ -936,10 +956,7 @@ for _sig in (signal.SIGINT, signal.SIGTERM):
     except Exception:
         pass
 
-# === Thread per analisi immagine YOLO/ADAS ===
 threading.Thread(target=process_image, daemon=True).start()
-
-# === Cleanup finale ===
 def cleanup():
     try:
         metrics["ended_at"] = time.time()
@@ -950,7 +967,6 @@ def cleanup():
         remove_all(world)
         print("[CLEANUP] World cleared.")
 
-# === Avvio simulazione ===
 try:
     print("[START] Starting main game loop (autopilot + ADAS active)...")
     game_loop.start()
