@@ -121,7 +121,7 @@ class PedestrianProtectionAutomaton:
     
     def _detected(self) -> bool:
         """Check if pedestrian is detected based on confidence buffer"""
-        limit = min(N, RT_WINDOW_FRAMES)
+        limit = min(N, RT_HALF_FRAMES)
         if len(self.B_C) < limit:
             return False
         count = sum(1 for i in range(limit) if self.B_C[i] >= TH_C)
@@ -129,7 +129,7 @@ class PedestrianProtectionAutomaton:
     
     def _crossing(self) -> bool:
         """Check if pedestrian is crossing based on crossing buffer"""
-        limit = min(N, RT_WINDOW_FRAMES)
+        limit = min(N, RT_HALF_FRAMES)
         if len(self.B_cross) < limit: 
             return False
         count = sum(self.B_cross[i] for i in range(limit))
