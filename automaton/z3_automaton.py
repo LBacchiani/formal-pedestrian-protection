@@ -97,7 +97,7 @@ def s_r_dist(B_C, B_TTC, B_cs, s_d, s_c, t):
     where k = ceil(n * SR_DISTANCE_CONSENSUS)
     """
     k = math.ceil(N * SR_DISTANCE_CONSENSUS)
-    count = Sum([P(And(B_TTC[i] > TH_TTC_R, B_TTC[i] <= TH_TTC_S)) for i in range(k)])
+    count = Sum([P(B_TTC[i] <= TH_TTC_S) for i in range(k)])
     threshold = math.ceil(k * CONSENSUS)
     return count >= threshold
 
@@ -107,7 +107,7 @@ def r_c_dist(B_C, B_TTC, B_cs, s_d, s_c, t):
     where k = ceil(n * RC_DISTANCE_CONSENSUS)
     """
     k = math.ceil(N * RC_DISTANCE_CONSENSUS)
-    count = Sum([P(And(B_TTC[i] > TH_TTC_C, B_TTC[i] <= TH_TTC_R)) for i in range(k)])
+    count = Sum([P(B_TTC[i] <= TH_TTC_R) for i in range(k)])
     threshold = math.ceil(k * CONSENSUS)
     return count >= threshold
 
@@ -118,7 +118,6 @@ def c_dist(B_C, B_TTC, B_cs, s_d, s_c, t):
     """
     k = math.ceil(N * C_DISTANCE_CONSENSUS)
     count = Sum([P(B_TTC[i] <= TH_TTC_C) for i in range(k)])
-   # threshold = math.ceil(k * CONSENSUS)
     return count >= k
 
 def crossing(B_C, B_TTC, B_cs, s_d, s_c, t):
@@ -145,61 +144,53 @@ def uncertain(B_C, B_TTC, B_cs, s_d, s_c, t):
 # ============================================================================
 # INVARIANTS (Inv)
 # ============================================================================
+
 def invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t):
     """
-    Inv: Q → 2^X specifies conditions for staying in each state
-    with variable domain constraints.
+    Invariant definition by design:
+    - Invariants partition the continuous space by TTC-based safety level.
+    - Transitions emerge when an invariant ceases to hold.
     """
-        
-    # --- Existing invariant logic ---
-    state_invariant = If(
-        q == Normal,
-        And(
-            Or(
-                Not(valid_d(B_C, B_TTC, B_cs, s_d, s_c, t)),
-                And(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t), Or(s_dist(B_C, B_TTC, B_cs, s_d, s_c, t), uncertain(B_C, B_TTC, B_cs, s_d, s_c, t))),
-            ),
-            t < CAMERA_FREQ
+
+    Inv_normal = And(
+        Or(
+            Not(valid_d(B_C, B_TTC, B_cs, s_d, s_c, t)),
+            And(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t), Or(s_dist(B_C, B_TTC, B_cs, s_d, s_c, t), uncertain(B_C, B_TTC, B_cs, s_d, s_c, t)))
         ),
-        If(
-            q == SafeWarning,
-            And(
-                valid_d(B_C, B_TTC, B_cs, s_d, s_c, t),
-                Or(
-                    Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t)),
-                    uncertain(B_C, B_TTC, B_cs, s_d, s_c, t)
-                ),
-                t < CAMERA_FREQ
-            ),
-            If(
-                q == Throttling,
-                And(
-                    valid_c(B_C, B_TTC, B_cs, s_d, s_c, t),
-                    Or(s_r_dist(B_C, B_TTC, B_cs, s_d, s_c, t), uncertain(B_C, B_TTC, B_cs, s_d, s_c, t)),
-                    t < CAMERA_FREQ
-                ),
-                If(
-                    q == SoftBraking,
-                    And(
-                        valid_c(B_C, B_TTC, B_cs, s_d, s_c, t),
-                         Or(r_c_dist(B_C, B_TTC, B_cs, s_d, s_c, t), uncertain(B_C, B_TTC, B_cs, s_d, s_c, t)),
-                        t < CAMERA_FREQ
-                    ),
-                    If(
-                        q == EmergencyBraking,
-                        And(
-                            valid_c(B_C, B_TTC, B_cs, s_d, s_c, t),
-                            t < CAMERA_FREQ
-                        ),
-                        False  # Invalid state
-                    )
-                )
-            )
-        )
+        t < CAMERA_FREQ
     )
 
-    # --- Combine domain + state invariant ---
-    return state_invariant
+    Inv_safe_warning = And(
+        valid_d(B_C, B_TTC, B_cs, s_d, s_c, t),
+        Or(Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t)),uncertain(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        t < CAMERA_FREQ
+    )
+
+    Inv_throttling = And(
+        valid_c(B_C, B_TTC, B_cs, s_d, s_c, t),
+        Or(And(s_r_dist(B_C, B_TTC, B_cs, s_d, s_c, t), Not(r_c_dist(B_C, B_TTC, B_cs, s_d, s_c, t)), Not(c_dist(B_C, B_TTC, B_cs, s_d, s_c, t))), uncertain(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        t < CAMERA_FREQ
+    )
+
+    Inv_soft_braking = And(
+        valid_c(B_C, B_TTC, B_cs, s_d, s_c, t),
+        Or(And(r_c_dist(B_C, B_TTC, B_cs, s_d, s_c, t), Not(c_dist(B_C, B_TTC, B_cs, s_d, s_c, t))), uncertain(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        t < CAMERA_FREQ
+    )
+
+    Inv_emergency = And(
+        valid_c(B_C, B_TTC, B_cs, s_d, s_c, t),
+        t < CAMERA_FREQ
+    )
+
+    return If(
+        q == Normal, Inv_normal,
+        If(q == SafeWarning, Inv_safe_warning,
+        If(q == Throttling, Inv_throttling,
+        If(q == SoftBraking, Inv_soft_braking,
+        If(q == EmergencyBraking, Inv_emergency, False))))
+    )
+
 
 # ============================================================================
 # GUARDS (G: E → 2^X)
@@ -229,28 +220,29 @@ def G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, t):
     )
 
 def G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, t):
-    """Guard for transitions to Throttling"""
     return And(
         valid_c(B_C, B_TTC, B_cs, s_d, s_c, t),
         s_r_dist(B_C, B_TTC, B_cs, s_d, s_c, t),
+        Not(r_c_dist(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        Not(c_dist(B_C, B_TTC, B_cs, s_d, s_c, t)),
         t < CAMERA_FREQ
     )
 
 def G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, t):
-    """Guard for transitions to SoftBraking"""
     return And(
         valid_c(B_C, B_TTC, B_cs, s_d, s_c, t),
         r_c_dist(B_C, B_TTC, B_cs, s_d, s_c, t),
+        Not(c_dist(B_C, B_TTC, B_cs, s_d, s_c, t)),
         t < CAMERA_FREQ
     )
 
 def G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t):
-    """Guard for transitions to EmergencyBraking"""
     return And(
         valid_c(B_C, B_TTC, B_cs, s_d, s_c, t),
         c_dist(B_C, B_TTC, B_cs, s_d, s_c, t),
         t < CAMERA_FREQ
     )
+
 
 def G_from_emergency(B_C, B_TTC, B_cs, s_d, s_c, t):
     """Guard for transitions from EmergencyBraking"""

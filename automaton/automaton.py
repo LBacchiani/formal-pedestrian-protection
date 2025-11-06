@@ -157,7 +157,7 @@ class PedestrianProtectionAutomaton:
         k = math.ceil(SR_DISTANCE_CONSENSUS * N)
         if len(self.B_TTC) < k:
             return False
-        count = sum(1 for i in range(k) if TH_TTC_R < self.B_TTC[i] <= TH_TTC_S)
+        count = sum(1 for i in range(k) if self.B_TTC[i] <= TH_TTC_S)
         threshold = math.ceil(CONSENSUS * k)
         return count >= threshold
     
@@ -166,7 +166,7 @@ class PedestrianProtectionAutomaton:
         k = math.ceil(RC_DISTANCE_CONSENSUS * N)
         if len(self.B_TTC) < k:
             return False
-        count = sum(1 for i in range(k) if TH_TTC_C < self.B_TTC[i] <= TH_TTC_R)
+        count = sum(1 for i in range(k) if self.B_TTC[i] <= TH_TTC_R)
         threshold = math.ceil(CONSENSUS * k)
         return count >= threshold
     
@@ -204,15 +204,15 @@ class PedestrianProtectionAutomaton:
         unc_dist = self._uncertain_distance()
 
         inv_normal = not valid_d or (valid_c and (s_dist or unc_dist))
-        inv_safe_warning = valid_d and (not valid_c or (valid_c and unc_dist))
-        inv_throttling = valid_c and (sr_dist or unc_dist)
-        inv_soft_braking = valid_c and (rc_dist or unc_dist)
+        inv_safe_warning = valid_d and (not valid_c or unc_dist)
+        inv_throttling = valid_c and ((sr_dist and not rc_dist and not c_dist) or unc_dist)
+        inv_soft_braking = valid_c and ((rc_dist and not c_dist) or unc_dist)
         inv_emergency_braking = valid_c
 
         G_to_normal = not valid_d or (valid_c and s_dist)
         G_to_safe_warning = valid_d and not valid_c
-        G_to_throttling = valid_c and sr_dist
-        G_to_soft_braking = valid_c and rc_dist
+        G_to_throttling = valid_c and sr_dist and not rc_dist and not c_dist
+        G_to_soft_braking = valid_c and rc_dist and not c_dist
         G_to_emergency_braking = valid_c and c_dist
         
         # Transition logic based on current state
