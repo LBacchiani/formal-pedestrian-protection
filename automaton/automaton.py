@@ -12,7 +12,7 @@ N = 10  # Buffer size
 RT_H = 700  # Reaction time (ms)
 CAMERA_FREQ = 100  # Camera frequency (ms)
 RT_WINDOW_FRAMES = RT_H / 100
-RT_HALF_FRAMES = max(1, int(RT_WINDOW_FRAMES / 2))  # Half reaction window (minimum 1)
+RT_HALF_FRAMES = max(1, math.floor(RT_WINDOW_FRAMES / 2))  # Half reaction window (minimum 1)
 
 # Consensus thresholds (percentage of buffer that must agree)
 S_DISTANCE_CONSENSUS = 0.6
@@ -121,7 +121,7 @@ class PedestrianProtectionAutomaton:
     
     def _detected(self) -> bool:
         """Check if pedestrian is detected based on confidence buffer"""
-        limit = math.floor(min(N, RT_WINDOW_FRAMES))
+        limit = min(N, RT_WINDOW_FRAMES)
         if len(self.B_C) < limit:
             return False
         count = sum(1 for i in range(limit) if self.B_C[i] >= TH_C)
@@ -129,7 +129,7 @@ class PedestrianProtectionAutomaton:
     
     def _crossing(self) -> bool:
         """Check if pedestrian is crossing based on crossing buffer"""
-        limit = math.floor(min(N, RT_WINDOW_FRAMES))
+        limit = min(N, RT_WINDOW_FRAMES)
         if len(self.B_cross) < limit: 
             return False
         count = sum(self.B_cross[i] for i in range(limit))
