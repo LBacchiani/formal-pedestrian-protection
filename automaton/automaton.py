@@ -32,7 +32,7 @@ TH_C_STALE = 300
 # Time-to-collision thresholds (seconds)
 TH_TTC_S = 5000 # Safe TTC threshold
 TH_TTC_R = 2500 # Risky TTC threshold
-TH_TTC_C = 1000 # Critical TTC threshold
+TH_TTC_C = 1500 # Critical TTC threshold
 
 # Staleness upper bounds
 MAX_UNCERTAIN = 300 # Handover timeout (ms)
@@ -109,8 +109,8 @@ class PedestrianProtectionAutomaton:
         self.B_cross: deque = deque(maxlen=N)  # Crossing status buffer {0,1}
         
         # Staleness timers (ms)
-        self.s_d = 0  # Detection staleness
-        self.s_c = 0  # Crossing staleness
+        self.s_d = TH_D_STALE  # Detection staleness
+        self.s_c = TH_C_STALE  # Crossing staleness
         
         # Last step call timestamp (seconds)
         self.last_step_call: Optional[float] = None
@@ -121,7 +121,7 @@ class PedestrianProtectionAutomaton:
     
     def _detected(self) -> bool:
         """Check if pedestrian is detected based on confidence buffer"""
-        limit = int(min(N, RT_WINDOW_FRAMES))
+        limit = math.floor(min(N, RT_WINDOW_FRAMES))
         if len(self.B_C) < limit:
             return False
         count = sum(1 for i in range(limit) if self.B_C[i] >= TH_C)
@@ -129,7 +129,7 @@ class PedestrianProtectionAutomaton:
     
     def _crossing(self) -> bool:
         """Check if pedestrian is crossing based on crossing buffer"""
-        limit = int(min(N, RT_WINDOW_FRAMES))
+        limit = math.floor(min(N, RT_WINDOW_FRAMES))
         if len(self.B_cross) < limit: 
             return False
         count = sum(self.B_cross[i] for i in range(limit))

@@ -18,10 +18,10 @@ def max_yaw_allowed(distance):
     """
     if distance <= 0:
         return 37.0
-    elif distance >= 30.0:
+    elif distance >= 40.0:
         return 0.0
     else:
-        return 37.0 * (1 - distance / 30.0)
+        return 37.0 * (1 - distance / 40.0)
     
 def pixel_to_angle(u: int, v: int, K: np.ndarray) -> Tuple[float, float]:
     fx, fy = K[0, 0], K[1, 1]
