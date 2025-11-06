@@ -47,7 +47,7 @@ CAMERA_WIDTH = 1080
 CAMERA_HEIGHT = 720
 VIEW_FOV = 80
 
-METRICS_PATH = "metrics_log.jsonl" 
+METRICS_PATH = "./logs/metrics_test1.jsonl" 
 RUN_ID = str(uuid.uuid4())
 RUN_START_TS = time.time()
 
@@ -96,6 +96,7 @@ prev_action = "normal"
 
 brake_start_loc = None
 speed_before_brake = 0.0
+braked = False
 
 SIM_RUNNING = True
 
@@ -128,7 +129,6 @@ def mqtt_processor():
             payload = json.loads(payload_raw.decode())
 
             action = payload.get("action", "").lower()
-            print(action)
             lvl = payload.get("level", None)
 
             if lvl is not None:
@@ -219,7 +219,8 @@ metrics = {
             "fog_distance": weather.fog_distance,
             "fog_falloff": weather.fog_falloff
         },
-        "is_day": (weather.sun_altitude_angle >= 0)
+        "is_day": (weather.sun_altitude_angle >= 0),
+        "speed_kmh": VEHICLE_SPEED
     },
 
     # === Metriche chiave ===
@@ -361,7 +362,7 @@ def process_image():
     global brake_active, mild_brake_active, emergency_brake_active
     global metrics, prev_action, walker
     global ttc_trigger_time, ttc_trigger_action
-    global steps, distance
+    global steps, distance, braked
     
     last_inference_time = 0.0
     target_dt = 0.105  # 10Hz
@@ -456,6 +457,7 @@ def process_image():
             metrics["reaction_times_simulation"][local_action].append(rt_sim)
             print(f"[RT_SIM_REAL] {local_action}: {rt_sim:.3f}s (TTC_real<4s)")
             ttc_trigger_action = "Complete"
+            braked = True
 
         payload = {
             "timestamp": now,
@@ -490,9 +492,7 @@ def process_image():
                     ttc_risky_start = None
                     mild_brake_active = True
 
-        print(ttc_camera)
-        print(crossing)
-        if(ttc_camera and ttc_camera < 4000 ):
+        if(ttc_camera and ttc_camera < 4000 or braked):
             send_mqtt_async(payload)
 
         closest_distance = closest_ped.distance if closest_ped else None

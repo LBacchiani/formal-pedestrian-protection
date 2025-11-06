@@ -32,7 +32,7 @@ TH_C_STALE = 300
 # Time-to-collision thresholds (seconds)
 TH_TTC_S = 5000 # Safe TTC threshold
 TH_TTC_R = 2500 # Risky TTC threshold
-TH_TTC_C = 1500 # Critical TTC threshold
+TH_TTC_C = 1000 # Critical TTC threshold
 
 # Staleness upper bounds
 MAX_UNCERTAIN = 300 # Handover timeout (ms)

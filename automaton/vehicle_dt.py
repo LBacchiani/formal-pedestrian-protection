@@ -42,10 +42,8 @@ def on_message(client, userdata, msg):
         
         # Update automaton with new data
         automaton.update_data(confidence=confidence, ttc=ttc, is_crossing=is_crossing)
-        print(automaton.get_status())
         # Perform a step
         action = automaton.step()
-        print(automaton.get_status())
         
         # Print or handle action
         # print(f"Automaton state: {automaton.state.value}, Action: {action.value}")

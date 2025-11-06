@@ -1,0 +1,2 @@
+scenario_name,speed_kmh,day_night,residual_speed_kmh,reaction_time_ttc_mean,reaction_time_sim_mean,stop_distance_mean,collision_rate
+metrics_test1,50.0,Day,31.036872151777306,0.3225822647412618,0.7863223552703857,,0.6666666666666666
