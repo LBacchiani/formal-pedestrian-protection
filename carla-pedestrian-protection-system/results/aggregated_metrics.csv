@@ -1,2 +1,3 @@
-scenario_name,speed_kmh,day_night,residual_speed_kmh,reaction_time_ttc_mean,reaction_time_sim_mean,stop_distance_mean,collision_rate
-metrics_test1,50.0,Day,31.036872151777306,0.3225822647412618,0.7863223552703857,,0.6666666666666666
+scenario_name,code,speed_kmh,day_night,residual_speed_kmh,Automaton reaction time,4-second TTC reaction time,Automaton braking distance [m],Minimum distance from pedestrian [m],collision_count,with_pedestrian,emergency_brake_count,total_stops,NCAP points,collision_rate,emergency_brake_rate
+metrics_test1,CPFA,25.0,Day,,0.38208895921707153,1.6412684321403503,1.2609114237129688,9.971261618808605,0,0.0,0,4,100.0,0.0,0.0
+metrics_test1,CPFA,50.0,Day,3.7407667557927033,0.3993212699890137,0.5448369741439819,14.94216775894165,2.0402551913413522,1,0.1,10,10,99.06480831105182,0.1,1.0

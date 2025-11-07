@@ -34,7 +34,7 @@ class Mode(Enum):
     KEYBOARD = 1
     STEERING_WHEEL = 2
 
-MODE = Mode.KEYBOARD
+MODE = Mode.STEERING_WHEEL
 NUM_WALKERS = 75
 
 BROKER = "localhost"
@@ -442,7 +442,7 @@ def process_image():
     global brake_start_loc, speed_before_brake
     global is_mild_brake_active, mild_brake_start_ts, mild_brake_start_loc, speed_before_mild_brake
     global ttc_safe_start, ttc_risky_start, ttc_critical_start
-    global metrics, prev_action
+    global metrics, prev_action, mild_brake_active
     
     last_inference_time = 0.0
     target_dt = 0.105  # 10Hz

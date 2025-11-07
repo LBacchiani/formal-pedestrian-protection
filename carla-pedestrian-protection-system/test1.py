@@ -48,7 +48,7 @@ CAMERA_HEIGHT = 720
 VIEW_FOV = 80
 
 METRICS_PATH = "./logs/metrics_test1.jsonl" 
-RUN_ID = str(uuid.uuid4())
+RUN_ID = "CPFA"
 RUN_START_TS = time.time()
 
 current_action = "normal"
@@ -66,8 +66,8 @@ mild_brake_start_loc = None
 speed_before_mild_brake = 0.0
 
 TH_TTC_S = 5000   # Safe
-TH_TTC_R = 2200   # Risky
-TH_TTC_C = 1200   # Critical
+TH_TTC_R = 2500   # Risky
+TH_TTC_C = 1000   # Critical
 
 ttc_safe_start = None
 ttc_risky_start = None
@@ -202,7 +202,8 @@ weather = carla.WeatherParameters(
 world.set_weather(weather)
 
 WALKER_SPEED = 2.22  # m/s (8 km/h)
-VEHICLE_SPEED = 50.0  # km/h 25 - 40 - 50
+VEHICLE_SPEED = 25.0  # km/h 25 - 40 - 50
+SCENARIO_NAME = "CPFA"
 
 metrics = {
     "run_id": RUN_ID,
@@ -222,6 +223,7 @@ metrics = {
         "is_day": (weather.sun_altitude_angle >= 0),
         "speed_kmh": VEHICLE_SPEED
     },
+    "scenario_name" : SCENARIO_NAME,
 
     # === Metriche chiave ===
     "residual_speed_kmh": None,
@@ -432,7 +434,6 @@ def process_image():
                 metrics["reaction_times_ttc_based"]["emergency_brake"].append(reaction_time)
                 ttc_critical_start = None
 
-
         if closest_ped:
             yaw_rad = closest_ped.yaw
             ttc_camera = closest_ped.time_to_collision
@@ -455,7 +456,6 @@ def process_image():
         if local_action in ("mild_brake", "brake", "emergency_brake") and ttc_trigger_time and ttc_trigger_action == "pending":
             rt_sim = time.time() - ttc_trigger_time
             metrics["reaction_times_simulation"][local_action].append(rt_sim)
-            print(f"[RT_SIM_REAL] {local_action}: {rt_sim:.3f}s (TTC_real<4s)")
             ttc_trigger_action = "Complete"
             braked = True
 
@@ -537,12 +537,12 @@ def process_image():
                 distance_travelled = mild_brake_start_loc.distance(stop_loc) if mild_brake_start_loc and stop_loc else None
                 duration = time.time() - mild_brake_start_ts
 
-                metrics["mild_brake"].append({
-                    "timestamp": time.time(),
-                    "speed_before_mild_brake": speed_before_mild_brake,
-                    "duration": duration,
-                    "distance_travelled": distance_travelled
-                })
+                # metrics["mild_brake"].append({
+                #     "timestamp": time.time(),
+                #     "speed_before_mild_brake": speed_before_mild_brake,
+                #     "duration": duration,
+                #     "distance_travelled": distance_travelled
+                # })
 
                 is_mild_brake_active = False
                 mild_brake_start_ts = 0.0
@@ -871,16 +871,13 @@ def _append_metrics_to_file():
         print(f"[METRICS] Appended run metrics to {os.path.abspath(METRICS_PATH)}")
 
     except Exception as e:
-        print("[METRICS] Failed to append metrics:", e)
-
+        pass
 
 def _graceful_exit_handler(signum=None, frame=None):
     if metrics.get("_flushed"):
         return
     metrics["_flushed"] = True
     _append_metrics_to_file()
-
-    print(f"[EXIT] Received signal {signum}, shutting down...")
 
     try:
         cv2.destroyAllWindows()
@@ -999,12 +996,10 @@ def cleanup():
             _append_metrics_to_file()
     finally:
         remove_all(world)
-        print("[CLEANUP] World cleared.")
 
 try:
-    print("[START] Starting main game loop (autopilot + ADAS active)...")
     game_loop.start()
 except KeyboardInterrupt:
-    print("\n[EXIT] Keyboard interrupt, cleaning up...")
+    pass
 finally:
     cleanup()
