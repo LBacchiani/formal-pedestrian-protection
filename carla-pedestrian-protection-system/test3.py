@@ -22,7 +22,6 @@ from utils import smooth_increase, max_yaw_allowed, pixel_to_angle, get_distance
 from agents.navigation.basic_agent import BasicAgent
 import manual_control as mc
 
-
 @dataclass
 class Pedestrian:
     x: int
@@ -48,7 +47,7 @@ CAMERA_WIDTH = 1080
 CAMERA_HEIGHT = 720
 VIEW_FOV = 80
 
-METRICS_PATH = "metrics_log.jsonl" 
+METRICS_PATH = "./logs/metrics_test3.jsonl" 
 RUN_ID = str(uuid.uuid4())
 RUN_START_TS = time.time()
 
@@ -74,13 +73,17 @@ ttc_safe_start = None
 ttc_risky_start = None
 ttc_critical_start = None
 
-CONTROL_LOCK_SECS = 1.0  
-control_mode = "AGENT"  
+CONTROL_LOCK_SECS = 1.0   
+control_mode = "AGENT"   
 override_release_time = 0.0
 
 mild_brake_active = False
 brake_active = False
 emergency_brake_active = False
+
+pedestrian_actor = None      
+ttc_trigger_time = None       
+ttc_trigger_action = None
 
 reaction_times = {
     "mild_brake": [],
@@ -93,9 +96,9 @@ prev_action = "normal"
 
 brake_start_loc = None
 speed_before_brake = 0.0
+braked = False
 
 SIM_RUNNING = True
-
 
 mqtt_client = mqtt.Client()
 mqtt_queue = queue.Queue(maxsize=50)
@@ -103,7 +106,7 @@ mqtt_lock = threading.Lock()
 
 if not os.path.exists(METRICS_PATH):
     with open(METRICS_PATH, "w", encoding="utf-8") as f:
-        f.write("")
+        f.write("") 
 try:
     mqtt_client.connect(BROKER, PORT, 60)
     mqtt_client.loop_start()
@@ -170,30 +173,43 @@ weather = carla.WeatherParameters(
 )
 
 # weather = carla.WeatherParameters(
-#     cloudiness=90.0,         # very cloudy sky
+#     cloudiness=0.0,         # very cloudy sky
 #     precipitation=0.0,       # rain
 #     precipitation_deposits=0.0, # puddles
 #     wind_intensity=0.0,      # wind
-#     sun_altitude_angle=-20.0, # below horizon = night
-#     fog_density=0.0,         # fog density (0–100)
+#     sun_altitude_angle=90.0, # below horizon = night
+#     fog_density=0.0,         # fog density (0â€“100)
 # )
+weather = carla.WeatherParameters(
+    cloudiness=90.0,         # very cloudy sky
+    precipitation=0.0,       # rain
+    precipitation_deposits=0.0, # puddles
+    wind_intensity=0.0,      # wind
+    sun_altitude_angle=-20.0, # below horizon = night
+    fog_density=0.0,         # fog density (0â€“100)
+)
 # weather = carla.WeatherParameters(
 #     cloudiness=90.0,         # very cloudy sky
 #     precipitation=80.0,      # heavy rain
 #     precipitation_deposits=80.0, # puddles
 #     wind_intensity=60.0,     # medium-strong wind
 #     sun_altitude_angle=-20.0, # below horizon = night
-#     fog_density=70.0,        # fog density (0–100)
+#     fog_density=70.0,        # fog density (0â€“100)
 #     fog_distance=20.0,       # max visibility in meters
 #     fog_falloff=1.5          # how much fog intensifies with distance
 # )
 
-# world.set_weather(weather)
+world.set_weather(weather)
+
+WALKER_SPEED = 1.388  # m/s (8 km/h)
+VEHICLE_SPEED = 50.0  # km/h 25 - 40 - 50
+SCENARIO_NAME = "CPNCO"
 
 metrics = {
     "run_id": RUN_ID,
     "started_at": RUN_START_TS,
     "ended_at": None,
+    "code": SCENARIO_NAME,
     "scenario": {
         "weather": {
             "cloudiness": weather.cloudiness,
@@ -204,21 +220,27 @@ metrics = {
             "fog_density": weather.fog_density,
             "fog_distance": weather.fog_distance,
             "fog_falloff": weather.fog_falloff
-        }
+        },
+        "is_day": (weather.sun_altitude_angle >= 0),
+        "speed_kmh": VEHICLE_SPEED
     },
-    "collisions": {
-        "count": 0,
-        "binary": 0,          
-        "events": []         
+    "scenario_name" : SCENARIO_NAME,
+
+    # === Metriche chiave ===
+    "residual_speed_kmh": None,
+    "impact_force_N": None,
+
+    "collisions": {"count": 0, "with_pedestrian": 0},
+
+    "reaction_times_ttc_based": {
+        "mild_brake": [], "brake": [], "emergency_brake": []
     },
-    "d_min_records": [],
-    "mild_brake": [],
-    "reaction_times": {
-        "mild_brake": [],
-        "brake": [],
-        "emergency_brake": []
+    "reaction_times_simulation": {
+        "mild_brake": [], "brake": [], "emergency_brake": []
     },
+    "stop_events": []
 }
+
 
 input_rgb_image = None
 input_rgb_image_lock = threading.Lock()
@@ -238,24 +260,20 @@ def disable_traffic_lights(world: carla.World):
 def spawn_single_walker(world: carla.World, location: carla.Location):
     bp_lib = world.get_blueprint_library()
     
-    # Seleziona sempre il pedone con ID fisso
-    walker_bp = bp_lib.find('walker.pedestrian.0042')
+    walker_bp = bp_lib.find('walker.pedestrian.0049')
     if walker_bp is None:
         raise RuntimeError("Blueprint 'walker.pedestrian.0041' non trovata!")
 
-    # Configura attributi
     if walker_bp.has_attribute('is_invincible'):
         walker_bp.set_attribute('is_invincible', 'false')
     if walker_bp.has_attribute('speed'):
         walker_bp.set_attribute('speed', '1.3')
 
-    # Crea il pedone
     trans = carla.Transform(location, carla.Rotation(yaw=0))
     walker = world.try_spawn_actor(walker_bp, trans)
     if walker is None:
-        raise RuntimeError("Error")
+        raise RuntimeError("Impossibile spawnare il pedone alla posizione richiesta; prova a variare z (es. +0.5).")
 
-    # Crea il controller AI
     controller_bp = bp_lib.find('controller.ai.walker')
     controller = world.try_spawn_actor(controller_bp, carla.Transform(), walker)
     if controller is not None:
@@ -345,7 +363,9 @@ def process_image():
     global is_mild_brake_active, mild_brake_start_ts, mild_brake_start_loc, speed_before_mild_brake
     global ttc_safe_start, ttc_risky_start, ttc_critical_start
     global brake_active, mild_brake_active, emergency_brake_active
-    global metrics, prev_action
+    global metrics, prev_action, walker
+    global ttc_trigger_time, ttc_trigger_action
+    global steps, distance, braked
     
     last_inference_time = 0.0
     target_dt = 0.105  # 10Hz
@@ -375,6 +395,7 @@ def process_image():
         vehicle_speed = vehicle.get_velocity()
         velocity = math.sqrt(vehicle_speed.x**2 + vehicle_speed.y**2 + vehicle_speed.z**2)
 
+
         detections = detect_pedestrians(rgb_array)
         detected_pedestrians: List[Pedestrian] = []
 
@@ -399,45 +420,27 @@ def process_image():
         conf = closest_ped.confidence if closest_ped else 0.0
 
         with ttc_lock:
-            if local_action == "brake":
-                print(ttc_risky_start)
-                print(prev_action)
-                print(current_action)
-
-            if local_action == "emergency_brake":
-                print(ttc_critical_start)
-                print(prev_action)
-                print(current_action)
-
-            if local_action == "mild_brake":
-                print(ttc_safe_start)
-                print(prev_action)
-                print(current_action)
-
             if local_action == "mild_brake" and ttc_safe_start is not None and prev_action != current_action:
                 reaction_time = time.time() - ttc_safe_start
-                reaction_times["mild_brake"].append(reaction_time)
-                metrics["reaction_times"]["mild_brake"].append(reaction_time)
-                ttc_safe_start = None  # reset
+                metrics["reaction_times_ttc_based"]["mild_brake"].append(reaction_time)
+                ttc_safe_start = None
 
             elif local_action == "brake" and ttc_risky_start is not None and prev_action != current_action:
                 reaction_time = time.time() - ttc_risky_start
-                reaction_times["brake"].append(reaction_time)
-                metrics["reaction_times"]["brake"].append(reaction_time)
-                ttc_risky_start = None  # reset
+                metrics["reaction_times_ttc_based"]["brake"].append(reaction_time)
+                ttc_risky_start = None 
 
             elif local_action == "emergency_brake" and ttc_critical_start is not None and prev_action != current_action:
                 reaction_time = time.time() - ttc_critical_start
-                reaction_times["emergency_brake"].append(reaction_time)
-                metrics["reaction_times"]["emergency_brake"].append(reaction_time)
-                ttc_critical_start = None  # reset
+                metrics["reaction_times_ttc_based"]["emergency_brake"].append(reaction_time)
+                ttc_critical_start = None
 
         if closest_ped:
             yaw_rad = closest_ped.yaw
             ttc_camera = closest_ped.time_to_collision
 
-            steer_norm = vehicle.get_control().steer  # [-1,+1]
-            steer_angle_deg = steer_norm * 35.0       # +-35° max steering angle
+            steer_norm = vehicle.get_control().steer 
+            steer_angle_deg = steer_norm * 35.0  
 
             yaw_deg = math.degrees(yaw_rad) 
             relative_yaw = yaw_deg - steer_angle_deg
@@ -446,6 +449,17 @@ def process_image():
         else:
             yaw, pitch, ttc_camera, crossing = None, None, None, 0
             
+
+        if  steps and distance and distance > steps and ttc_trigger_time is None:
+            ttc_trigger_time = time.time()
+            ttc_trigger_action = "pending"
+
+        if local_action in ("mild_brake", "brake", "emergency_brake") and ttc_trigger_time and ttc_trigger_action == "pending":
+            rt_sim = time.time() - ttc_trigger_time
+            metrics["reaction_times_simulation"][local_action].append(rt_sim)
+            ttc_trigger_action = "Complete"
+            braked = True
+
         payload = {
             "timestamp": now,
             "vehicle_speed": velocity,
@@ -479,7 +493,8 @@ def process_image():
                     ttc_risky_start = None
                     mild_brake_active = True
 
-        send_mqtt_async(payload)
+        if(ttc_camera and ttc_camera < 4000 or braked):
+            send_mqtt_async(payload)
 
         closest_distance = closest_ped.distance if closest_ped else None
 
@@ -523,12 +538,12 @@ def process_image():
                 distance_travelled = mild_brake_start_loc.distance(stop_loc) if mild_brake_start_loc and stop_loc else None
                 duration = time.time() - mild_brake_start_ts
 
-                metrics["mild_brake"].append({
-                    "timestamp": time.time(),
-                    "speed_before_mild_brake": speed_before_mild_brake,
-                    "duration": duration,
-                    "distance_travelled": distance_travelled
-                })
+                # metrics["mild_brake"].append({
+                #     "timestamp": time.time(),
+                #     "speed_before_mild_brake": speed_before_mild_brake,
+                #     "duration": duration,
+                #     "distance_travelled": distance_travelled
+                # })
 
                 is_mild_brake_active = False
                 mild_brake_start_ts = 0.0
@@ -677,7 +692,6 @@ class GameLoop(object):
 
                 except Exception as e:
                     print(f"[DISPLAY] Error updating OpenCV windows: {e}")
-
                 now_ts = time.time()
 
                 if control_mode == "AGENT":
@@ -717,7 +731,6 @@ class GameLoop(object):
                         control.brake = 0.0
 
                 vehicle.apply_control(control)
-
                 self.render(clock)
 
         finally:
@@ -794,31 +807,30 @@ def setup(vehicle):
 
 
 def collision_callback(event):
-    global collision_data, metrics
-    other_actor = event.other_actor
-    actor_id = other_actor.id
-    actor_type = other_actor.type_id
+    global metrics, vehicle
 
+    other_actor = event.other_actor
+    actor_type = other_actor.type_id
     impulse = event.normal_impulse
-    magnitude = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
     now = time.time()
 
-    if (actor_id == collision_data["last_actor"]) and (now - collision_data["last_time"] < collision_data["cooldown"]):
-        return
+    impact_force = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
+    v = vehicle.get_velocity()
+    kmh = math.sqrt(v.x**2 + v.y**2 + v.z**2) * 3.6
 
-    collision_data["count"] += 1
-    collision_data["last_time"] = now
-    collision_data["last_actor"] = actor_id
+    metrics["collisions"]["count"] += 1
 
-    metrics["collisions"]["count"] = collision_data["count"]
-    metrics["collisions"]["binary"] = 1
-    metrics["collisions"]["events"].append({
-        "t": now,
-        "other_actor": actor_type,
-        "intensity": magnitude
-    })
+    # Se colpisce un pedone â†’ registra residuo e forza
+    if actor_type.startswith("walker.pedestrian"):
+        metrics["collisions"]["with_pedestrian"] = 1
+        if metrics["residual_speed_kmh"] is None:
+            metrics["residual_speed_kmh"] = kmh
+            metrics["impact_force_N"] = impact_force
+            metrics["last_collision_ts"] = now
 
-    print(f"[COLLISION] #{collision_data['count']} with {actor_type}, intensity={magnitude:.2f}")
+    print(f"[COLLISION] #{metrics['collisions']['count']} with {actor_type}, "
+          f"v={kmh:.2f} km/h, F={impact_force:.1f} N")
+
 
 def rgb_camera_callback(image):
     try:
@@ -846,22 +858,27 @@ collision_data = {
 def _append_metrics_to_file():
     try:
         metrics["ended_at"] = metrics.get("ended_at") or time.time()
-        metrics["d_min_records"] = d_min_records
-        metrics["reaction_times"] = reaction_times
+        if d_min_records:
+            metrics["stop_events"].extend(d_min_records)
+        if reaction_times:
+            for key in reaction_times:
+                if key in metrics["reaction_times_ttc_based"]:
+                    metrics["reaction_times_ttc_based"][key].extend(reaction_times[key])
+
         payload = json.dumps(metrics, ensure_ascii=False)
         with open(METRICS_PATH, "a", encoding="utf-8") as f:
             f.write(payload + "\n")
+
         print(f"[METRICS] Appended run metrics to {os.path.abspath(METRICS_PATH)}")
+
     except Exception as e:
-        print("[METRICS] Failed to append metrics:", e)
+        pass
 
 def _graceful_exit_handler(signum=None, frame=None):
     if metrics.get("_flushed"):
         return
     metrics["_flushed"] = True
     _append_metrics_to_file()
-
-    print(f"[EXIT] Received signal {signum}, shutting down...")
 
     try:
         cv2.destroyAllWindows()
@@ -878,8 +895,9 @@ for tl in world.get_actors().filter('traffic.traffic_light'):
     tl.set_state(carla.TrafficLightState.Green)
     tl.set_green_time(99999)
 
-start = carla.Location(x=-41.5, y=80.0, z=1.0)
-destination = carla.Location(x=-41.5, y=0.0, z=1.0)
+
+start = carla.Location(x=-41.5, y=100.0, z=1.0)
+destination = carla.Location(x=-41.5, y=-50.0, z=1.0)
 
 bp_lib = world.get_blueprint_library()
 vehicle_bp = bp_lib.find('vehicle.mercedes.coupe_2020')
@@ -887,15 +905,27 @@ vehicle = world.try_spawn_actor(vehicle_bp, carla.Transform(start, carla.Rotatio
 world.tick()
 
 game_loop = setup(vehicle)
+
 rgb_camera, depth_camera = setup_camera(vehicle)
 
 actor_agent = BasicAgent(vehicle)
 actor_agent.set_destination(destination)
-actor_agent.set_target_speed(30)  # km/h
+actor_agent.set_target_speed(VEHICLE_SPEED)  # km/h
 actor_agent.ignore_vehicles(True)
 actor_agent.ignore_stop_signs(True)
 
-pedestrian_start = carla.Location(x=-52.0, y=36.0, z=1.0) 
+global step 
+global distance
+
+if VEHICLE_SPEED == 50.0:
+    pedestrian_start = carla.Location(x=-22.0, y=5.0, z=1.0)
+    steps = 15
+elif VEHICLE_SPEED == 40.0:
+    pedestrian_start = carla.Location(x=-19.0, y=5.0, z=1.0)
+    steps = 18
+else:
+    pedestrian_start = carla.Location(x=-8.0, y=5.0, z=1.0)
+    steps = 29
 
 bp_lib = world.get_blueprint_library()
 walker_bp = bp_lib.find('walker.pedestrian.0042')
@@ -903,17 +933,64 @@ walker_bp = bp_lib.find('walker.pedestrian.0042')
 if walker_bp.has_attribute('is_invincible'):
     walker_bp.set_attribute('is_invincible', 'false')
 
-walker_transform = carla.Transform(pedestrian_start, carla.Rotation(yaw=0))
+walker_transform = carla.Transform(pedestrian_start, carla.Rotation(yaw=180))
 walker = world.try_spawn_actor(walker_bp, walker_transform)
 
 if walker:
-
     world.tick()
     time.sleep(0.2)
-    real_start = walker.get_location()
+    real_start = carla.Location(x=-24.0, y=5.0, z=1.0)
+
+        # === VEHICLES AS OBSTACLES (STATIC) ===
+    obstacle_bp = bp_lib.find('vehicle.tesla.model3')  # modello compatto
+
+    # Calcola la direzione del pedone: stessa Y, ma i veicoli più spostati lateralmente
+    # Se il pedone cammina verso sinistra (x decrescente), i veicoli stanno "sotto" (y + offset)
+    # Se invece cammina verso destra, metti offset con y - offset
+
+    offset_y = 3.0   # distanza laterale dal percorso del pedone
+    spacing = 6.0    # distanza longitudinale tra i due veicoli
+
+    # Primo veicolo vicino al punto di spawn del pedone
+    veh1_loc = carla.Location(
+        x=real_start.x,
+        y=real_start.y + offset_y,
+        z=1.0
+    )
+    veh1_rot = carla.Rotation(yaw=walker_transform.rotation.yaw)  # stessa direzione del pedone
+
+    # Secondo veicolo subito dietro
+    veh2_loc = carla.Location(
+        x=real_start.x - spacing if walker_transform.rotation.yaw == 180 else real_start.x + spacing,
+        y=real_start.y + offset_y,
+        z=1.0
+    )
+    veh2_rot = carla.Rotation(yaw=walker_transform.rotation.yaw)
+
+    veh3_loc = carla.Location(
+        x=real_start.x - spacing - spacing if walker_transform.rotation.yaw == 180 else real_start.x + spacing + spacing,
+        y=real_start.y + offset_y,
+        z=1.0
+    )
+    veh3_rot = carla.Rotation(yaw=walker_transform.rotation.yaw)
+
+    obstacle1 = world.try_spawn_actor(obstacle_bp, carla.Transform(veh1_loc, veh1_rot))
+    obstacle2 = world.try_spawn_actor(obstacle_bp, carla.Transform(veh2_loc, veh2_rot))
+    obstacle3 = world.try_spawn_actor(obstacle_bp, carla.Transform(veh3_loc, veh3_rot))
+
+    if obstacle1:
+        obstacle1.set_autopilot(False)
+    if obstacle2:
+        obstacle2.set_autopilot(False)
+    if obstacle3:
+        obstacle3.set_autopilot(False)
+
+    print(f"[OBSTACLES] Spawned two parked vehicles at y={pedestrian_start.y + offset_y:.1f}")
+
+
     def pedestrian_control(x=1, y=0, z=0):
         ctrl = carla.WalkerControl()
-        ctrl.speed = 1.3  # m/s
+        ctrl.speed = WALKER_SPEED
         ctrl.direction = carla.Vector3D(x, y, z)
         return ctrl
 
@@ -922,7 +999,8 @@ if walker:
         ctrl.speed = 0.0
         walker.apply_control(ctrl)
 
-    def _move_pedestrian(world, walker, ctrl, max_distance=20.0):
+    def _move_pedestrian(world, walker, ctrl, max_distance=60.0):
+        global distance
         start_loc = walker.get_location()
         while True:
             walker.apply_control(ctrl)
@@ -931,13 +1009,15 @@ if walker:
 
             current = walker.get_location()
             dist = current.distance(start_loc)
+            distance = dist
 
             if dist >= max_distance:
                 stop_pedestrian(walker)
+                print("[WALKER] Attraversamento completato.")
                 break
 
     def move_pedestrian(world, walker):
-        ctrl = pedestrian_control(1, 0, 0)
+        ctrl = pedestrian_control(-1, 0, 0)
         threading.Thread(target=_move_pedestrian, args=(world, walker, ctrl), daemon=True).start()
 
     move_pedestrian(world, walker)
@@ -965,12 +1045,10 @@ def cleanup():
             _append_metrics_to_file()
     finally:
         remove_all(world)
-        print("[CLEANUP] World cleared.")
 
 try:
-    print("[START] Starting main game loop (autopilot + ADAS active)...")
     game_loop.start()
 except KeyboardInterrupt:
-    print("\n[EXIT] Keyboard interrupt, cleaning up...")
+    pass
 finally:
     cleanup()

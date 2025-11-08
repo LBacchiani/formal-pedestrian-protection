@@ -47,7 +47,7 @@ CAMERA_WIDTH = 1080
 CAMERA_HEIGHT = 720
 VIEW_FOV = 80
 
-METRICS_PATH = "./logs/metrics_test2.jsonl" 
+METRICS_PATH = "./logs/metrics_test1.jsonl" 
 RUN_ID = str(uuid.uuid4())
 RUN_START_TS = time.time()
 
@@ -201,9 +201,9 @@ weather = carla.WeatherParameters(
 
 world.set_weather(weather)
 
-WALKER_SPEED = 2.22  # m/s (8 km/h)
+WALKER_SPEED = 1.388  # m/s (5 km/h)
 VEHICLE_SPEED = 50.0  # km/h 25 - 40 - 50
-SCENARIO_NAME = "CPFA"
+SCENARIO_NAME = "CPNA"
 
 metrics = {
     "run_id": RUN_ID,
@@ -918,13 +918,13 @@ global step
 global distance
 
 if VEHICLE_SPEED == 50.0:
-    pedestrian_start = carla.Location(x=-0.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-22.0, y=5.0, z=1.0)
     steps = 15
 elif VEHICLE_SPEED == 40.0:
-    pedestrian_start = carla.Location(x=-3.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-19.0, y=5.0, z=1.0)
     steps = 18
 else:
-    pedestrian_start = carla.Location(x=-14.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-8.0, y=5.0, z=1.0)
     steps = 29
 
 bp_lib = world.get_blueprint_library()
@@ -933,7 +933,7 @@ walker_bp = bp_lib.find('walker.pedestrian.0042')
 if walker_bp.has_attribute('is_invincible'):
     walker_bp.set_attribute('is_invincible', 'false')
 
-walker_transform = carla.Transform(pedestrian_start, carla.Rotation(yaw=0))
+walker_transform = carla.Transform(pedestrian_start, carla.Rotation(yaw=180))
 walker = world.try_spawn_actor(walker_bp, walker_transform)
 
 if walker:
@@ -969,7 +969,7 @@ if walker:
                 break
 
     def move_pedestrian(world, walker):
-        ctrl = pedestrian_control(1, 0, 0)
+        ctrl = pedestrian_control(-1, 0, 0)
         threading.Thread(target=_move_pedestrian, args=(world, walker, ctrl), daemon=True).start()
 
     move_pedestrian(world, walker)

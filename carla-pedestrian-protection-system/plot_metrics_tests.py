@@ -2,14 +2,14 @@ import os
 import json
 import pandas as pd
 import seaborn as sns
+import numpy as np
 import matplotlib.pyplot as plt
 
-# === CONFIG ===
-INPUT_DIR = "./logs"  # cartella con i file .jsonl (uno per scenario)
-OUTPUT_DIR = "./results"
+
+INPUT_DIR = "./logs"
+OUTPUT_DIR = "./results2"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# === Carica tutti i log jsonl ===
 def load_all_logs(folder):
     records = []
     for filename in os.listdir(folder):
@@ -26,9 +26,7 @@ def load_all_logs(folder):
     return pd.DataFrame(records)
 
 df = load_all_logs(INPUT_DIR)
-print(f"[INFO] Loaded {len(df)} runs from {df['scenario_name'].nunique()} scenarios.")
 
-# === Estrazione metrica per ogni run ===
 def extract_metrics(row):
     scen = row.get("scenario", {}) or {}
     speed_kmh = scen.get("speed_kmh")
@@ -53,7 +51,6 @@ def extract_metrics(row):
         except Exception:
             pass
 
-    # Reaction times
     rt_ttc, rt_sim = [], []
     for a in ("mild_brake", "brake", "emergency_brake"):
         rt_ttc += row.get("reaction_times_ttc_based", {}).get(a, []) or []
@@ -79,45 +76,30 @@ def extract_metrics(row):
     })
 
 def compute_scenario_score(row):
+    import numpy as np
     import pandas as pd
 
-    scenario_code = row.get("code")
-    v_test = row.get("speed_kmh", 0)
+    v_test = row.get("speed_kmh", 0.0)
     v_impact = row.get("residual_speed_kmh", v_test)
     collided = (row.get("with_pedestrian", 0) > 0) or (row.get("collision_count", 0) > 0)
 
     if pd.isna(v_impact):
         v_impact = v_test
 
-    # Evita valori negativi
     v_impact = max(0.0, v_impact)
+    delta_v = max(0.0, v_test - v_impact) 
 
-    # Soglie massime per scenario (velocità d'impatto in km/h a cui il punteggio = 0)
-    # Valori basati su Euro NCAP 2024 v4.5.1 (AEB Pedestrian)
-    max_vimpact = {
-        "CPFA": 40,   # Car-to-Pedestrian Farside Adult 50 %
-        "CPNA": 35,   # Nearside Adult
-        "CPNCO": 30,  # Nearside Child Obstructed
-        "CPLA": 25,   # Longitudinal Adult
-        "CPTA": 20,   # Turning Adult
-        "CPRA": 8,    # Reverse Adult
-        "CPRC": 8,    # Reverse Child
-    }
+    if v_test < 40:
+        return 100.0 if not collided else 0.0
 
-    vmax = max_vimpact.get(scenario_code, 35.0)
 
-    # --- Calcolo punteggio secondo NCAP (interpolazione lineare) ---
+    x = np.array([0, 5, 10, 15, 20])
+    y = np.array([0, 0.25, 0.5, 0.75, 1.0])
+    score_norm = np.interp(delta_v, x, y)
+
     if not collided:
         return 100.0
-
-    # Se collisione e impatto ≥ soglia → 0 punti
-    if v_impact >= vmax:
-        return 0.0
-
-    # Se collisione con impatto inferiore → interpolazione lineare
-    # punteggio = (1 - v_impact/vmax) * 100
-    score = max(0.0, min(100.0, (1.0 - (v_impact / vmax)) * 100.0))
-    return score
+    return round(score_norm * 100.0, 2)
 
 
 metrics_df = df.apply(extract_metrics, axis=1)
@@ -125,8 +107,6 @@ metrics_df.dropna(subset=["speed_kmh"], inplace=True)
 metrics_df["day_night"] = metrics_df["is_day"].map({True: "Day", False: "Night"})
 metrics_df["points_ncap"] = metrics_df.apply(compute_scenario_score, axis=1)
 
-print(metrics_df.groupby(["code", "speed_kmh", "day_night"])["points_ncap"].describe())
-# === Aggregazione ===
 agg_metrics = (
     metrics_df.groupby(["scenario_name", "code", "speed_kmh", "day_night"])
     .agg({
@@ -144,13 +124,11 @@ agg_metrics = (
     .reset_index()
 )
 
-# === Calcolo rate ===
 agg_metrics["collision_rate"] = agg_metrics["with_pedestrian"]
 agg_metrics["emergency_brake_rate"] = (
     agg_metrics["emergency_brake_count"] / agg_metrics["total_stops"]
 ).replace([float("inf"), pd.NA], 0)
 
-# === Salva CSV con nomi personalizzati ===
 output_csv = os.path.join(OUTPUT_DIR, "aggregated_metrics.csv")
 agg_metrics_renamed = agg_metrics.rename(columns={
     "reaction_time_ttc_mean": "Automaton reaction time",
@@ -164,8 +142,6 @@ agg_metrics_renamed = agg_metrics.rename(columns={
 agg_metrics_renamed.to_csv(output_csv, index=False)
 print(f"[OK] Aggregated metrics saved to {output_csv} (with renamed columns)")
 
-
-# === Plot automatici ===
 sns.set(style="whitegrid")
 
 def safe_plot(plot_func, data, x, y, **kwargs):
@@ -180,38 +156,53 @@ def safe_plot(plot_func, data, x, y, **kwargs):
     plt.tight_layout()
 
 for scen, group in agg_metrics.groupby("scenario_name"):
-    # Collision rate
-    safe_plot(
-        sns.barplot,
+    plt.figure(figsize=(10, 6))
+    sns.barplot(
         data=group,
         x="speed_kmh",
         y="collision_rate",
         hue="day_night",
         palette="coolwarm",
         alpha=0.8,
+        edgecolor="black"
     )
-    plt.title(f"Collision Rate – {scen}")
-    plt.ylabel("Collision Rate")
-    plt.xlabel("Vehicle speed [km/h]")
-    plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_collision_rate.png"))
+    plt.title(f"Collision Rate – {scen}", fontsize=14, weight="bold")
+    plt.ylabel("Collision Rate", fontsize=12)
+    plt.xlabel("Vehicle speed [km/h]", fontsize=12)
+    plt.ylim(0, 1)
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_collision_rate.png"), dpi=200)
     plt.close()
 
-    # Reaction time (simulation)
-    safe_plot(
-        sns.lineplot,
-        data=group,
-        x="speed_kmh",
-        y="reaction_time_sim_mean",
-        hue="day_night",
-        marker="o",
-    )
-    plt.title(f"Reaction Time (Simulation-based) – {scen}")
-    plt.ylabel("Reaction time [s]")
-    plt.xlabel("Vehicle speed [km/h]")
-    plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_reaction_time_sim.png"))
-    plt.close()
+    sub = group[group["collision_rate"] > 0]
+    if not sub.empty:
+        plt.figure(figsize=(10, 6))
+        sns.barplot(
+            data=sub,
+            x="speed_kmh",
+            y="residual_speed_kmh",
+            hue="day_night",
+            palette="coolwarm",
+            alpha=0.9,
+            edgecolor="black"
+        )
+        plt.axhline(20, color="gray", linestyle="--", linewidth=1)
+        plt.text(sub["speed_kmh"].max(), 21, "NCAP 20 km/h", color="gray", ha="right", fontsize=10)
 
-    # Residual speed
+        plt.title(f"Residual Impact Speed – {scen}", fontsize=14, weight="bold")
+        plt.ylabel("Residual impact speed [km/h]", fontsize=12)
+        plt.xlabel("Vehicle speed [km/h]", fontsize=12)
+        plt.ylim(0, max(sub["residual_speed_kmh"].max() * 1.2, 10))
+        plt.grid(True, linestyle="--", alpha=0.5)
+        plt.tight_layout()
+        plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_impact_speed.png"), dpi=200)
+        plt.close()
+
+
+
+
+
     safe_plot(
         sns.lineplot,
         data=group,
@@ -226,7 +217,7 @@ for scen, group in agg_metrics.groupby("scenario_name"):
     plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_residual_speed.png"))
     plt.close()
 
-    # d_min mean
+
     safe_plot(
         sns.lineplot,
         data=group,
@@ -241,7 +232,6 @@ for scen, group in agg_metrics.groupby("scenario_name"):
     plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_dmin_mean.png"))
     plt.close()
 
-    # Emergency brake rate
     safe_plot(
         sns.barplot,
         data=group,
@@ -261,16 +251,14 @@ for scen, group in agg_metrics.groupby("scenario_name"):
         sns.barplot,
         data=group,
         x="speed_kmh",
-        y="punteggio_ncap",
+        y="points_ncap",
         hue="day_night",
         palette="viridis",
     )
-    plt.title(f"Punteggio NCAP – {scen}")
+    plt.title(f"NCAP Score")
     plt.ylabel("Punteggio (%)")
     plt.xlabel("Vehicle speed [km/h]")
     plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_punteggio_ncap.png"))
     plt.close()
-
-
 
 print(f"[DONE] Plots saved in {OUTPUT_DIR}/")
