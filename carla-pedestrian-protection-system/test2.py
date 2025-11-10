@@ -21,6 +21,16 @@ from typing import List
 from utils import smooth_increase, max_yaw_allowed, pixel_to_angle, get_distance_to_pedestrian_centroid
 from agents.navigation.basic_agent import BasicAgent
 import manual_control as mc
+import argparse
+
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument("-s", "--speed", "--speed-kmh",
+                    dest="speed_kmh", type=float, default=10.0,
+                    help="Velocità veicolo in km/h")
+args, unknown = parser.parse_known_args()
+sys.argv = [sys.argv[0]] + unknown
+
+VEHICLE_SPEED = float(args.speed_kmh)  # km/h
 
 @dataclass
 class Pedestrian:
@@ -203,7 +213,6 @@ weather = carla.WeatherParameters(
 world.set_weather(weather)
 
 WALKER_SPEED = 1.388  # m/s (5 km/h)
-VEHICLE_SPEED = 25.0  # km/h 25 - 40 - 50
 SCENARIO_NAME = "CPNA"
 FRONT_CAR_LENGTH = 2
 

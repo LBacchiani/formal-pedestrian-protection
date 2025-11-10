@@ -21,6 +21,16 @@ from typing import List
 from utils import smooth_increase, max_yaw_allowed, pixel_to_angle, get_distance_to_pedestrian_centroid
 from agents.navigation.basic_agent import BasicAgent
 import manual_control as mc
+import argparse
+
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument("-s", "--speed", "--speed-kmh",
+                    dest="speed_kmh", type=float, default=10.0,
+                    help="Velocità veicolo in km/h")
+args, unknown = parser.parse_known_args()
+sys.argv = [sys.argv[0]] + unknown
+
+VEHICLE_SPEED = float(args.speed_kmh)  # km/h
 
 @dataclass
 class Pedestrian:
@@ -144,13 +154,14 @@ def mqtt_processor():
                 with mqtt_lock:
                     current_action = action
                     if current_action == "normal":
-                        level_brk = 0.05
+                        level_brk = 0
                         level_intensity = 1
 
             with mqtt_lock:
                 if current_action == "brake":
                         level_intensity += 1
                         level_brk = smooth_increase(level_brk, level_intensity, 0.007, velocity)
+                        print(level_brk)
             
         except Exception as e:
             print("[MQTT] Error in processor:", e)
@@ -160,8 +171,8 @@ mqtt_client.subscribe(TOPIC_REC)
 processor_thread = threading.Thread(target=mqtt_processor, daemon=True)
 processor_thread.start()
 model = YOLO("yolov8n.pt")
-cv2.namedWindow('RGB image', cv2.WINDOW_NORMAL)
-cv2.namedWindow('Depth image', cv2.WINDOW_NORMAL)
+# cv2.namedWindow('RGB image', cv2.WINDOW_NORMAL)
+# cv2.namedWindow('Depth image', cv2.WINDOW_NORMAL)
 
 client = carla.Client('localhost', 2000)
 client.set_timeout(10.0)
@@ -201,9 +212,9 @@ weather = carla.WeatherParameters(
 
 world.set_weather(weather)
 
-WALKER_SPEED = 2.22  # m/s (8 km/h)
-VEHICLE_SPEED = 20.0  # km/h 25 - 40 - 50
+WALKER_SPEED = 2.22  # m/s (5 km/h)
 SCENARIO_NAME = "CPFA"
+FRONT_CAR_LENGTH = 2
 
 metrics = {
     "run_id": RUN_ID,
@@ -363,7 +374,7 @@ def process_image():
         detected_pedestrians: List[Pedestrian] = []
 
         for conf, _, centroid in detections:
-            distance = get_distance_to_pedestrian_centroid(centroid, depth_array)
+            distance = max(0.5, get_distance_to_pedestrian_centroid(centroid, depth_array) - FRONT_CAR_LENGTH)
             yaw, pitch = pixel_to_angle(centroid[0], centroid[1], rgb_camera.calibration)
 
             time_to_collision = (distance / velocity * 1000.0) if velocity > 0.01 else float('inf')
@@ -439,7 +450,7 @@ def process_image():
                 emergency_brake_active = False
                 brake_active = False
                 mild_brake_active = False
-            if ttc_camera and ttc_camera < float('inf'):
+            if ttc_camera and ttc_camera < float('inf') and crossing:
                 if ttc_camera < TH_TTC_C and ttc_critical_start is None and not emergency_brake_active:
                     ttc_critical_start = time.time()
                     ttc_safe_start = None
@@ -476,10 +487,13 @@ def process_image():
             stop_loc = vehicle.get_location()
             stopping_distance = brake_start_loc.distance(stop_loc) if brake_start_loc and stop_loc else None
 
+            distace = abs(5 - stop_loc.y) - 2
+            distace = max(0.3, distace)
+
             d_min_records.append({
                 "timestamp": time.time(),
                 "action": d_min_action if d_min_action else "unknown",
-                "d_min": d_min_current if d_min_current != float('inf') else None,
+                "d_min": distace if distace != float('inf') else None,
                 "stopping_distance": stopping_distance if stopping_distance else None,
                 "speed_before_brake": speed_before_brake if speed_before_brake else None
             })
@@ -645,11 +659,6 @@ class GameLoop(object):
                                 CAMERA_HEIGHT - 300),
                                 (0, 0, 255), 2
                             )
-
-                        if bgr_for_display is not None:
-                            cv2.imshow('RGB image', bgr_for_display)
-                        if depth_for_display is not None:
-                            cv2.imshow('Depth image', depth_for_display)
 
                         cv2.waitKey(1)
 
