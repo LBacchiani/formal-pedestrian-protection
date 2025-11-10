@@ -47,7 +47,7 @@ CAMERA_WIDTH = 1080
 CAMERA_HEIGHT = 720
 VIEW_FOV = 80
 
-METRICS_PATH = "./logs/metrics_test1.jsonl" 
+METRICS_PATH = "./logs/metrics_test2.jsonl" 
 RUN_ID = str(uuid.uuid4())
 RUN_START_TS = time.time()
 
@@ -67,7 +67,7 @@ speed_before_mild_brake = 0.0
 
 TH_TTC_S = 5000   # Safe
 TH_TTC_R = 2500   # Risky
-TH_TTC_C = 1000   # Critical
+TH_TTC_C = 1100   # Critical
 
 ttc_safe_start = None
 ttc_risky_start = None
@@ -144,13 +144,14 @@ def mqtt_processor():
                 with mqtt_lock:
                     current_action = action
                     if current_action == "normal":
-                        level_brk = 0.05
+                        level_brk = 0
                         level_intensity = 1
 
             with mqtt_lock:
                 if current_action == "brake":
                         level_intensity += 1
                         level_brk = smooth_increase(level_brk, level_intensity, 0.007, velocity)
+                        print(level_brk)
             
         except Exception as e:
             print("[MQTT] Error in processor:", e)
@@ -160,8 +161,8 @@ mqtt_client.subscribe(TOPIC_REC)
 processor_thread = threading.Thread(target=mqtt_processor, daemon=True)
 processor_thread.start()
 model = YOLO("yolov8n.pt")
-cv2.namedWindow('RGB image', cv2.WINDOW_NORMAL)
-cv2.namedWindow('Depth image', cv2.WINDOW_NORMAL)
+# cv2.namedWindow('RGB image', cv2.WINDOW_NORMAL)
+# cv2.namedWindow('Depth image', cv2.WINDOW_NORMAL)
 
 client = carla.Client('localhost', 2000)
 client.set_timeout(10.0)
@@ -172,22 +173,22 @@ weather = carla.WeatherParameters(
     cloudiness=0.0
 )
 
-# weather = carla.WeatherParameters(
-#     cloudiness=0.0,         # very cloudy sky
-#     precipitation=0.0,       # rain
-#     precipitation_deposits=0.0, # puddles
-#     wind_intensity=0.0,      # wind
-#     sun_altitude_angle=90.0, # below horizon = night
-#     fog_density=0.0,         # fog density (0–100)
-# )
 weather = carla.WeatherParameters(
-    cloudiness=90.0,         # very cloudy sky
+    cloudiness=0.0,         # very cloudy sky
     precipitation=0.0,       # rain
     precipitation_deposits=0.0, # puddles
     wind_intensity=0.0,      # wind
-    sun_altitude_angle=-20.0, # below horizon = night
+    sun_altitude_angle=90.0, # below horizon = night
     fog_density=0.0,         # fog density (0–100)
 )
+# weather = carla.WeatherParameters(
+#     cloudiness=90.0,         # very cloudy sky
+#     precipitation=0.0,       # rain
+#     precipitation_deposits=0.0, # puddles
+#     wind_intensity=0.0,      # wind
+#     sun_altitude_angle=-20.0, # below horizon = night
+#     fog_density=0.0,         # fog density (0–100)
+# )
 # weather = carla.WeatherParameters(
 #     cloudiness=90.0,         # very cloudy sky
 #     precipitation=80.0,      # heavy rain
@@ -202,8 +203,9 @@ weather = carla.WeatherParameters(
 world.set_weather(weather)
 
 WALKER_SPEED = 1.388  # m/s (5 km/h)
-VEHICLE_SPEED = 50.0  # km/h 25 - 40 - 50
+VEHICLE_SPEED = 25.0  # km/h 25 - 40 - 50
 SCENARIO_NAME = "CPNA"
+FRONT_CAR_LENGTH = 2
 
 metrics = {
     "run_id": RUN_ID,
@@ -250,43 +252,6 @@ input_depth_image_lock = threading.Lock()
 
 processed_output = None
 processed_output_lock = threading.Lock()
-
-def disable_traffic_lights(world: carla.World):
-    for tl in world.get_actors().filter('traffic.traffic_light'):
-        tl.freeze(True)
-        tl.set_state(carla.TrafficLightState.Green)
-        tl.set_green_time(99999)
-
-def spawn_single_walker(world: carla.World, location: carla.Location):
-    bp_lib = world.get_blueprint_library()
-    
-    walker_bp = bp_lib.find('walker.pedestrian.0042')
-    if walker_bp is None:
-        raise RuntimeError("Blueprint 'walker.pedestrian.0041' non trovata!")
-
-    if walker_bp.has_attribute('is_invincible'):
-        walker_bp.set_attribute('is_invincible', 'false')
-    if walker_bp.has_attribute('speed'):
-        walker_bp.set_attribute('speed', '1.3')
-
-    trans = carla.Transform(location, carla.Rotation(yaw=0))
-    walker = world.try_spawn_actor(walker_bp, trans)
-    if walker is None:
-        raise RuntimeError("Impossibile spawnare il pedone alla posizione richiesta; prova a variare z (es. +0.5).")
-
-    controller_bp = bp_lib.find('controller.ai.walker')
-    controller = world.try_spawn_actor(controller_bp, carla.Transform(), walker)
-    if controller is not None:
-        controller.start()
-        controller.set_max_speed(1.3)
-
-    return walker, controller
-
-
-def walker_go_to(world: carla.World, controller, target_loc: carla.Location):
-    if controller is None:
-        return
-    controller.go_to_location(target_loc)
 
 def remove_all(world: carla.World):
     for a in world.get_actors().filter('vehicle.*'):
@@ -400,7 +365,7 @@ def process_image():
         detected_pedestrians: List[Pedestrian] = []
 
         for conf, _, centroid in detections:
-            distance = get_distance_to_pedestrian_centroid(centroid, depth_array)
+            distance = max(0.5, get_distance_to_pedestrian_centroid(centroid, depth_array) - FRONT_CAR_LENGTH)
             yaw, pitch = pixel_to_angle(centroid[0], centroid[1], rgb_camera.calibration)
 
             time_to_collision = (distance / velocity * 1000.0) if velocity > 0.01 else float('inf')
@@ -476,7 +441,7 @@ def process_image():
                 emergency_brake_active = False
                 brake_active = False
                 mild_brake_active = False
-            if ttc_camera and ttc_camera < float('inf'):
+            if ttc_camera and ttc_camera < float('inf') and crossing:
                 if ttc_camera < TH_TTC_C and ttc_critical_start is None and not emergency_brake_active:
                     ttc_critical_start = time.time()
                     ttc_safe_start = None
@@ -513,10 +478,13 @@ def process_image():
             stop_loc = vehicle.get_location()
             stopping_distance = brake_start_loc.distance(stop_loc) if brake_start_loc and stop_loc else None
 
+            distace = abs(5 - stop_loc.y) - 2
+            distace = max(0.3, distace)
+
             d_min_records.append({
                 "timestamp": time.time(),
                 "action": d_min_action if d_min_action else "unknown",
-                "d_min": d_min_current if d_min_current != float('inf') else None,
+                "d_min": distace if distace != float('inf') else None,
                 "stopping_distance": stopping_distance if stopping_distance else None,
                 "speed_before_brake": speed_before_brake if speed_before_brake else None
             })
@@ -682,11 +650,6 @@ class GameLoop(object):
                                 CAMERA_HEIGHT - 300),
                                 (0, 0, 255), 2
                             )
-
-                        if bgr_for_display is not None:
-                            cv2.imshow('RGB image', bgr_for_display)
-                        if depth_for_display is not None:
-                            cv2.imshow('Depth image', depth_for_display)
 
                         cv2.waitKey(1)
 
@@ -918,13 +881,13 @@ global step
 global distance
 
 if VEHICLE_SPEED == 50.0:
-    pedestrian_start = carla.Location(x=-22.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-29.5, y=5.0, z=1.0)
     steps = 15
 elif VEHICLE_SPEED == 40.0:
-    pedestrian_start = carla.Location(x=-19.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-27.5, y=5.0, z=1.0)
     steps = 18
 else:
-    pedestrian_start = carla.Location(x=-8.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-21.0, y=5.0, z=1.0)
     steps = 29
 
 bp_lib = world.get_blueprint_library()

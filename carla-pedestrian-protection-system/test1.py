@@ -47,7 +47,7 @@ CAMERA_WIDTH = 1080
 CAMERA_HEIGHT = 720
 VIEW_FOV = 80
 
-METRICS_PATH = "./logs/metrics_test2.jsonl" 
+METRICS_PATH = "./logs/metrics_test1.jsonl" 
 RUN_ID = str(uuid.uuid4())
 RUN_START_TS = time.time()
 
@@ -67,7 +67,7 @@ speed_before_mild_brake = 0.0
 
 TH_TTC_S = 5000   # Safe
 TH_TTC_R = 2500   # Risky
-TH_TTC_C = 1000   # Critical
+TH_TTC_C = 1100   # Critical
 
 ttc_safe_start = None
 ttc_risky_start = None
@@ -172,22 +172,22 @@ weather = carla.WeatherParameters(
     cloudiness=0.0
 )
 
-# weather = carla.WeatherParameters(
-#     cloudiness=0.0,         # very cloudy sky
-#     precipitation=0.0,       # rain
-#     precipitation_deposits=0.0, # puddles
-#     wind_intensity=0.0,      # wind
-#     sun_altitude_angle=90.0, # below horizon = night
-#     fog_density=0.0,         # fog density (0–100)
-# )
 weather = carla.WeatherParameters(
-    cloudiness=90.0,         # very cloudy sky
+    cloudiness=0.0,         # very cloudy sky
     precipitation=0.0,       # rain
     precipitation_deposits=0.0, # puddles
     wind_intensity=0.0,      # wind
-    sun_altitude_angle=-20.0, # below horizon = night
+    sun_altitude_angle=90.0, # below horizon = night
     fog_density=0.0,         # fog density (0–100)
 )
+# weather = carla.WeatherParameters(
+#     cloudiness=90.0,         # very cloudy sky
+#     precipitation=0.0,       # rain
+#     precipitation_deposits=0.0, # puddles
+#     wind_intensity=0.0,      # wind
+#     sun_altitude_angle=-20.0, # below horizon = night
+#     fog_density=0.0,         # fog density (0–100)
+# )
 # weather = carla.WeatherParameters(
 #     cloudiness=90.0,         # very cloudy sky
 #     precipitation=80.0,      # heavy rain
@@ -202,7 +202,7 @@ weather = carla.WeatherParameters(
 world.set_weather(weather)
 
 WALKER_SPEED = 2.22  # m/s (8 km/h)
-VEHICLE_SPEED = 50.0  # km/h 25 - 40 - 50
+VEHICLE_SPEED = 20.0  # km/h 25 - 40 - 50
 SCENARIO_NAME = "CPFA"
 
 metrics = {
@@ -250,43 +250,6 @@ input_depth_image_lock = threading.Lock()
 
 processed_output = None
 processed_output_lock = threading.Lock()
-
-def disable_traffic_lights(world: carla.World):
-    for tl in world.get_actors().filter('traffic.traffic_light'):
-        tl.freeze(True)
-        tl.set_state(carla.TrafficLightState.Green)
-        tl.set_green_time(99999)
-
-def spawn_single_walker(world: carla.World, location: carla.Location):
-    bp_lib = world.get_blueprint_library()
-    
-    walker_bp = bp_lib.find('walker.pedestrian.0042')
-    if walker_bp is None:
-        raise RuntimeError("Blueprint 'walker.pedestrian.0041' non trovata!")
-
-    if walker_bp.has_attribute('is_invincible'):
-        walker_bp.set_attribute('is_invincible', 'false')
-    if walker_bp.has_attribute('speed'):
-        walker_bp.set_attribute('speed', '1.3')
-
-    trans = carla.Transform(location, carla.Rotation(yaw=0))
-    walker = world.try_spawn_actor(walker_bp, trans)
-    if walker is None:
-        raise RuntimeError("Impossibile spawnare il pedone alla posizione richiesta; prova a variare z (es. +0.5).")
-
-    controller_bp = bp_lib.find('controller.ai.walker')
-    controller = world.try_spawn_actor(controller_bp, carla.Transform(), walker)
-    if controller is not None:
-        controller.start()
-        controller.set_max_speed(1.3)
-
-    return walker, controller
-
-
-def walker_go_to(world: carla.World, controller, target_loc: carla.Location):
-    if controller is None:
-        return
-    controller.go_to_location(target_loc)
 
 def remove_all(world: carla.World):
     for a in world.get_actors().filter('vehicle.*'):
@@ -918,13 +881,13 @@ global step
 global distance
 
 if VEHICLE_SPEED == 50.0:
-    pedestrian_start = carla.Location(x=-0.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-60.0, y=5.0, z=1.0)
     steps = 15
 elif VEHICLE_SPEED == 40.0:
-    pedestrian_start = carla.Location(x=-3.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-63.0, y=5.0, z=1.0)
     steps = 18
 else:
-    pedestrian_start = carla.Location(x=-14.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-80.0, y=5.0, z=1.0)
     steps = 29
 
 bp_lib = world.get_blueprint_library()

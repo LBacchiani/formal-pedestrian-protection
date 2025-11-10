@@ -13,7 +13,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 def load_all_logs(folder):
     records = []
     for filename in os.listdir(folder):
-        if filename.endswith(".jsonl"):
+        if filename.endswith("2.jsonl"):
             scenario_name = filename.replace(".jsonl", "")
             with open(os.path.join(folder, filename), "r", encoding="utf-8") as f:
                 for line in f:
@@ -65,7 +65,7 @@ def extract_metrics(row):
         "is_day": is_day,
         "residual_speed_kmh": row.get("residual_speed_kmh"),
         "impact_force_N": row.get("impact_force_N"),
-        "collision_count": collisions.get("count", 0),
+        "collision_count": collisions.get("with_pedestrian", 0),
         "with_pedestrian": collisions.get("with_pedestrian", 0),
         "reaction_time_ttc_mean": pd.Series(rt_ttc).mean() if rt_ttc else None,
         "reaction_time_sim_mean": pd.Series(rt_sim).mean() if rt_sim else None,
@@ -156,109 +156,74 @@ def safe_plot(plot_func, data, x, y, **kwargs):
     plt.tight_layout()
 
 for scen, group in agg_metrics.groupby("scenario_name"):
-    plt.figure(figsize=(10, 6))
-    sns.barplot(
-        data=group,
-        x="speed_kmh",
-        y="collision_rate",
-        hue="day_night",
-        palette="coolwarm",
-        alpha=0.8,
-        edgecolor="black"
-    )
-    plt.title(f"Collision Rate – {scen}", fontsize=14, weight="bold")
-    plt.ylabel("Collision Rate", fontsize=12)
-    plt.xlabel("Vehicle speed [km/h]", fontsize=12)
-    plt.ylim(0, 1)
-    plt.grid(True, linestyle="--", alpha=0.5)
-    plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_collision_rate.png"), dpi=200)
-    plt.close()
+    # === Boxplot della d_min ===
+    sub = metrics_df[metrics_df["scenario_name"] == scen]
 
-    sub = group[group["collision_rate"] > 0]
-    if not sub.empty:
+    if not sub.empty and "d_min" in sub.columns:
         plt.figure(figsize=(10, 6))
-        sns.barplot(
+        sns.boxplot(
             data=sub,
             x="speed_kmh",
-            y="residual_speed_kmh",
+            y="d_min",
             hue="day_night",
             palette="coolwarm",
-            alpha=0.9,
-            edgecolor="black"
+            fliersize=3,      # dimensione dei punti outlier
+            linewidth=1.2,    # spessore linee box
+            width=0.6
         )
-        plt.axhline(20, color="gray", linestyle="--", linewidth=1)
-        plt.text(sub["speed_kmh"].max(), 21, "NCAP 20 km/h", color="gray", ha="right", fontsize=10)
-
-        plt.title(f"Residual Impact Speed – {scen}", fontsize=14, weight="bold")
-        plt.ylabel("Residual impact speed [km/h]", fontsize=12)
+        plt.title(f"Distribution of d_min – {scen}", fontsize=14, weight="bold")
+        plt.ylabel("Minimum distance from pedestrian [m]", fontsize=12)
         plt.xlabel("Vehicle speed [km/h]", fontsize=12)
-        plt.ylim(0, max(sub["residual_speed_kmh"].max() * 1.2, 10))
         plt.grid(True, linestyle="--", alpha=0.5)
         plt.tight_layout()
-        plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_impact_speed.png"), dpi=200)
+        plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_dmin_boxplot.png"), dpi=200)
         plt.close()
 
 
+    # === BOX 1: Automaton reaction time (reaction_times_ttc_based) ===
+    sub_ttc = metrics_df[metrics_df["scenario_name"] == scen]
+    if not sub_ttc.empty and "reaction_time_ttc_mean" in sub_ttc.columns:
+        plt.figure(figsize=(10, 6))
+        sns.boxplot(
+            data=sub_ttc,
+            x="speed_kmh",
+            y="reaction_time_ttc_mean",
+            hue="day_night",
+            palette="crest",
+            fliersize=3,
+            linewidth=1.2,
+            width=0.6
+        )
+        plt.title(f"Automaton Reaction Time – {scen}", fontsize=14, weight="bold")
+        plt.ylabel("Automaton reaction time [s]", fontsize=12)
+        plt.xlabel("Vehicle speed [km/h]", fontsize=12)
+        plt.grid(True, linestyle="--", alpha=0.5)
+        plt.tight_layout()
+        plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_reaction_time_ttc_based.png"), dpi=200)
+        plt.close()
 
 
+    # === BOX 2: Simulation reaction time (reaction_times_simulation) ===
+    sub_sim = metrics_df[metrics_df["scenario_name"] == scen]
+    if not sub_sim.empty and "reaction_time_sim_mean" in sub_sim.columns:
+        plt.figure(figsize=(10, 6))
+        sns.boxplot(
+            data=sub_sim,
+            x="speed_kmh",
+            y="reaction_time_sim_mean",
+            hue="day_night",
+            palette="mako",
+            fliersize=3,
+            linewidth=1.2,
+            width=0.6
+        )
+        plt.title(f"Simulation Reaction Time – {scen}", fontsize=14, weight="bold")
+        plt.ylabel("Simulation reaction time [s]", fontsize=12)
+        plt.xlabel("Vehicle speed [km/h]", fontsize=12)
+        plt.grid(True, linestyle="--", alpha=0.5)
+        plt.tight_layout()
+        plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_reaction_time_simulation.png"), dpi=200)
+        plt.close()
 
-    safe_plot(
-        sns.lineplot,
-        data=group,
-        x="speed_kmh",
-        y="residual_speed_kmh",
-        hue="day_night",
-        marker="o",
-    )
-    plt.title(f"Residual Speed – {scen}")
-    plt.ylabel("Residual speed [km/h]")
-    plt.xlabel("Vehicle speed [km/h]")
-    plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_residual_speed.png"))
-    plt.close()
-
-
-    safe_plot(
-        sns.lineplot,
-        data=group,
-        x="speed_kmh",
-        y="d_min",
-        hue="day_night",
-        marker="o",
-    )
-    plt.title(f"Mean d_min – {scen}")
-    plt.ylabel("d_min [m]")
-    plt.xlabel("Vehicle speed [km/h]")
-    plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_dmin_mean.png"))
-    plt.close()
-
-    safe_plot(
-        sns.barplot,
-        data=group,
-        x="speed_kmh",
-        y="emergency_brake_rate",
-        hue="day_night",
-        palette="Reds",
-        alpha=0.8,
-    )
-    plt.title(f"Emergency Brake Rate – {scen}")
-    plt.ylabel("Emergency brake rate")
-    plt.xlabel("Vehicle speed [km/h]")
-    plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_emergency_brake_rate.png"))
-    plt.close()
-
-    safe_plot(
-        sns.barplot,
-        data=group,
-        x="speed_kmh",
-        y="points_ncap",
-        hue="day_night",
-        palette="viridis",
-    )
-    plt.title(f"NCAP Score")
-    plt.ylabel("Punteggio (%)")
-    plt.xlabel("Vehicle speed [km/h]")
-    plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_punteggio_ncap.png"))
-    plt.close()
 
 print(f"[DONE] Plots saved in {OUTPUT_DIR}/")

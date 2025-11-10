@@ -67,7 +67,7 @@ speed_before_mild_brake = 0.0
 
 TH_TTC_S = 5000   # Safe
 TH_TTC_R = 2500   # Risky
-TH_TTC_C = 1000   # Critical
+TH_TTC_C = 1100   # Critical
 
 ttc_safe_start = None
 ttc_risky_start = None
@@ -251,43 +251,6 @@ input_depth_image_lock = threading.Lock()
 
 processed_output = None
 processed_output_lock = threading.Lock()
-
-def disable_traffic_lights(world: carla.World):
-    for tl in world.get_actors().filter('traffic.traffic_light'):
-        tl.freeze(True)
-        tl.set_state(carla.TrafficLightState.Green)
-        tl.set_green_time(99999)
-
-def spawn_single_walker(world: carla.World, location: carla.Location):
-    bp_lib = world.get_blueprint_library()
-    
-    walker_bp = bp_lib.find('walker.pedestrian.0042')
-    if walker_bp is None:
-        raise RuntimeError("Blueprint 'walker.pedestrian.0041' non trovata!")
-
-    if walker_bp.has_attribute('is_invincible'):
-        walker_bp.set_attribute('is_invincible', 'false')
-    if walker_bp.has_attribute('speed'):
-        walker_bp.set_attribute('speed', '1.3')
-
-    trans = carla.Transform(location, carla.Rotation(yaw=0))
-    walker = world.try_spawn_actor(walker_bp, trans)
-    if walker is None:
-        raise RuntimeError("Impossibile spawnare il pedone alla posizione richiesta; prova a variare z (es. +0.5).")
-
-    controller_bp = bp_lib.find('controller.ai.walker')
-    controller = world.try_spawn_actor(controller_bp, carla.Transform(), walker)
-    if controller is not None:
-        controller.start()
-        controller.set_max_speed(1.3)
-
-    return walker, controller
-
-
-def walker_go_to(world: carla.World, controller, target_loc: carla.Location):
-    if controller is None:
-        return
-    controller.go_to_location(target_loc)
 
 def remove_all(world: carla.World):
     for a in world.get_actors().filter('vehicle.*'):

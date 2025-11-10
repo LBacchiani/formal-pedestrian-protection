@@ -5,10 +5,19 @@ from typing import Tuple
 def smooth_increase(level_brk, level_intensity, rate, speed):
     max_speed = 50.0
     speed_factor = min(speed / max_speed, 1.0)
-    delta = rate * (level_intensity ** 2) * (0.5 + speed_factor * 1.5)
-    level_brk += delta
-    max_brk = 0.15 + 0.25 * speed_factor
+
+    if speed < 7:
+        # a basse velocità decresce lentamente
+        delta = -100
+    else:
+        delta = rate * (level_intensity ** 1.2) * (speed_factor * 1.05)
+
+    level_brk = max(0.0, level_brk + delta)  # evita valori negativi
+    max_brk = 0.40 + 0.30 * speed_factor
+
+    # print(f"Speed: {speed:.2f}, Δ: {delta:.4f}, Level: {level_brk:.4f}, Max: {max_brk:.4f}")
     return min(level_brk, max_brk)
+
 
 def max_yaw_allowed(distance):
     """
