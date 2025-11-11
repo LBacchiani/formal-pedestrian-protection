@@ -75,9 +75,9 @@ mild_brake_start_ts = 0.0
 mild_brake_start_loc = None
 speed_before_mild_brake = 0.0
 
-TH_TTC_S = 5000   # Safe
-TH_TTC_R = 2500   # Risky
-TH_TTC_C = 1100   # Critical
+TH_TTC_S = 4000   # Safe
+TH_TTC_R = 2000   # Risky
+TH_TTC_C = 1000   # Critical
 
 ttc_safe_start = None
 ttc_risky_start = None
@@ -160,9 +160,7 @@ def mqtt_processor():
             with mqtt_lock:
                 if current_action == "brake":
                         level_intensity += 1
-                        level_brk = smooth_increase(level_brk, level_intensity, 0.007, velocity)
-                        print(level_brk)
-            
+                        level_brk = smooth_increase(level_brk, level_intensity, 0.007, velocity)            
         except Exception as e:
             print("[MQTT] Error in processor:", e)
 
@@ -329,7 +327,7 @@ def send_mqtt_async(payload: dict):
 def get_current_action():
     with mqtt_lock:
         return current_action
-
+enter = False
 def process_image():
     global input_rgb_image, input_depth_image, processed_output, velocity
     global d_min_current, d_min_records, is_braking_active, d_min_action
@@ -339,7 +337,7 @@ def process_image():
     global brake_active, mild_brake_active, emergency_brake_active
     global metrics, prev_action, walker
     global ttc_trigger_time, ttc_trigger_action
-    global steps, distance, braked
+    global steps, distance, braked, enter
     
     last_inference_time = 0.0
     target_dt = 0.105  # 10Hz
@@ -484,12 +482,17 @@ def process_image():
                 d_min_action = local_action
 
         elif is_braking_active and local_action not in ("brake", "emergency_brake"):
+            enter = True
+            is_braking_active = False
+            d_min_current = float('inf')
+            brake_start_loc = None
+
+        if enter and velocity<0.1:
             stop_loc = vehicle.get_location()
             stopping_distance = brake_start_loc.distance(stop_loc) if brake_start_loc and stop_loc else None
 
-            distace = abs(5 - stop_loc.y) - 2
-            distace = max(0.3, distace)
-
+            distace = abs(5 - stop_loc.y) - 3
+            distace = max(0.5, distace)
             d_min_records.append({
                 "timestamp": time.time(),
                 "action": d_min_action if d_min_action else "unknown",
@@ -497,11 +500,10 @@ def process_image():
                 "stopping_distance": stopping_distance if stopping_distance else None,
                 "speed_before_brake": speed_before_brake if speed_before_brake else None
             })
-            is_braking_active = False
-            d_min_current = float('inf')
-            brake_start_loc = None
+            print(velocity, distace)
             stopping_distance = None
             speed_before_brake = 0.0
+            enter = False
 
         if local_action == "mild_brake":
             if not is_mild_brake_active:
@@ -890,13 +892,13 @@ global step
 global distance
 
 if VEHICLE_SPEED == 50.0:
-    pedestrian_start = carla.Location(x=-60.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-61.5, y=5.0, z=1.0)
     steps = 15
 elif VEHICLE_SPEED == 40.0:
-    pedestrian_start = carla.Location(x=-63.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-64.5, y=5.0, z=1.0)
     steps = 18
 else:
-    pedestrian_start = carla.Location(x=-80.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-75, y=5.0, z=1.0)
     steps = 29
 
 bp_lib = world.get_blueprint_library()

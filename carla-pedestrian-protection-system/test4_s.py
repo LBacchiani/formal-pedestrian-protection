@@ -57,7 +57,7 @@ CAMERA_WIDTH = 1080
 CAMERA_HEIGHT = 720
 VIEW_FOV = 80
 
-METRICS_PATH = "./logs/metrics_test3.jsonl" 
+METRICS_PATH = "./logs/metrics_test4.jsonl" 
 RUN_ID = str(uuid.uuid4())
 RUN_START_TS = time.time()
 
@@ -213,7 +213,7 @@ weather = carla.WeatherParameters(
 world.set_weather(weather)
 
 WALKER_SPEED = 1.388  # m/s (5 km/h)
-SCENARIO_NAME = "CPNCO"
+SCENARIO_NAME = "CPTA_FarSide"
 FRONT_CAR_LENGTH = 2
 
 metrics = {
@@ -868,23 +868,70 @@ for tl in world.get_actors().filter('traffic.traffic_light'):
     tl.set_green_time(99999)
 
 
-start = carla.Location(x=-41.5, y=100.0, z=1.0)
-destination = carla.Location(x=-41.5, y=-50.0, z=1.0)
+start = carla.Location(x=-41.5, y=120.0, z=1.0)
+# Curva dolce verso destra
+waypoints_curve = [
+    carla.Location(x=-41.5, y=76.00, z=1.0),  # inizio curva
+    carla.Location(x=-41.0, y=75.80, z=1.0),
+    carla.Location(x=-40.0, y=75.30, z=1.0),
+    carla.Location(x=-39.0, y=74.80, z=1.0),
+    carla.Location(x=-38.0, y=74.30, z=1.0),
+    carla.Location(x=-37.0, y=73.90, z=1.0),
+    carla.Location(x=-36.0, y=73.60, z=1.0),
+    carla.Location(x=-35.0, y=73.30, z=1.0),
+    carla.Location(x=-34.0, y=73.00, z=1.0),
+    carla.Location(x=-33.0, y=72.70, z=1.0),
+    carla.Location(x=-32.0, y=72.40, z=1.0),
+    carla.Location(x=-31.0, y=72.20, z=1.0),
+    carla.Location(x=-30.0, y=72.00, z=1.0),
+    carla.Location(x=-29.0, y=71.80, z=1.0),
+    carla.Location(x=-28.0, y=71.60, z=1.0),
+    carla.Location(x=-27.0, y=71.40, z=1.0),
+    carla.Location(x=-26.0, y=71.30, z=1.0),
+    carla.Location(x=-25.0, y=71.20, z=1.0),
+    carla.Location(x=-24.0, y=71.10, z=1.0),
+    carla.Location(x=-23.0, y=71.00, z=1.0),
+    carla.Location(x=-22.0, y=70.95, z=1.0),
+    carla.Location(x=-21.0, y=70.85, z=1.0),
+    carla.Location(x=-20.0, y=70.75, z=1.0),
+    carla.Location(x=-19.0, y=70.65, z=1.0),
+    carla.Location(x=-18.0, y=70.55, z=1.0),
+    carla.Location(x=-17.0, y=70.45, z=1.0),
+    carla.Location(x=-16.0, y=70.35, z=1.0),
+    carla.Location(x=-15.0, y=70.25, z=1.0),
+    carla.Location(x=-14.0, y=70.15, z=1.0),
+    carla.Location(x=-13.0, y=70.05, z=1.0),
+    carla.Location(x=-12.0, y=69.98, z=1.0),
+    carla.Location(x=-11.0, y=69.94, z=1.0),
+    carla.Location(x=-10.0, y=69.90, z=1.0)   # uscita curva
+]
 
+route = waypoints_curve
 bp_lib = world.get_blueprint_library()
 vehicle_bp = bp_lib.find('vehicle.mercedes.coupe_2020')
 vehicle = world.try_spawn_actor(vehicle_bp, carla.Transform(start, carla.Rotation(yaw=-90)))
 world.tick()
 
 game_loop = setup(vehicle)
-
 rgb_camera, depth_camera = setup_camera(vehicle)
 
 actor_agent = BasicAgent(vehicle)
-actor_agent.set_destination(destination)
 actor_agent.set_target_speed(VEHICLE_SPEED)  # km/h
 actor_agent.ignore_vehicles(True)
 actor_agent.ignore_stop_signs(True)
+
+from agents.navigation.local_planner import RoadOption
+
+# Ottieni il map object
+carla_map = world.get_map()
+
+# Converte le location in waypoint reali
+waypoints_route = [carla_map.get_waypoint(loc) for loc in route]
+
+# Crea la lista di tuple (waypoint, None) – o (waypoint, RoadOption.LANE_FOLLOW) se disponibile
+actor_agent.set_global_plan([(wp, RoadOption.LANE_FOLLOW if hasattr(RoadOption, 'LANE_FOLLOW') else None)
+                             for wp in waypoints_route])
+
 
 global step 
 global distance
@@ -896,71 +943,23 @@ elif VEHICLE_SPEED == 40.0:
     pedestrian_start = carla.Location(x=-27.5, y=5.0, z=1.0)
     steps = 18
 else:
-    pedestrian_start = carla.Location(x=-21.0, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-23.5, y=5.0, z=1.0)
     steps = 29
 
 bp_lib = world.get_blueprint_library()
-walker_bp = bp_lib.find('walker.pedestrian.0049')
+walker_bp = bp_lib.find('walker.pedestrian.0042')
 
 if walker_bp.has_attribute('is_invincible'):
     walker_bp.set_attribute('is_invincible', 'false')
 
-walker_transform = carla.Transform(pedestrian_start, carla.Rotation(yaw=180))
+walker_transform = carla.Transform(pedestrian_start, carla.Rotation(yaw=-90))
 walker = world.try_spawn_actor(walker_bp, walker_transform)
 
 if walker:
     world.tick()
     time.sleep(0.2)
-    real_start = carla.Location(x=-23.5, y=5.0, z=1.0)
 
-        # === VEHICLES AS OBSTACLES (STATIC) ===
-    obstacle_bp = bp_lib.find('vehicle.tesla.model3')  # modello compatto
-
-    # Calcola la direzione del pedone: stessa Y, ma i veicoli più spostati lateralmente
-    # Se il pedone cammina verso sinistra (x decrescente), i veicoli stanno "sotto" (y + offset)
-    # Se invece cammina verso destra, metti offset con y - offset
-
-    offset_y = 3.0   # distanza laterale dal percorso del pedone
-    spacing = 6.0    # distanza longitudinale tra i due veicoli
-
-    # Primo veicolo vicino al punto di spawn del pedone
-    veh1_loc = carla.Location(
-        x=real_start.x,
-        y=real_start.y + offset_y,
-        z=1.0
-    )
-    veh1_rot = carla.Rotation(yaw=walker_transform.rotation.yaw)  # stessa direzione del pedone
-
-    # Secondo veicolo subito dietro
-    veh2_loc = carla.Location(
-        x=real_start.x - spacing if walker_transform.rotation.yaw == 180 else real_start.x + spacing,
-        y=real_start.y + offset_y,
-        z=1.0
-    )
-    veh2_rot = carla.Rotation(yaw=walker_transform.rotation.yaw)
-
-    veh3_loc = carla.Location(
-        x=real_start.x - spacing - spacing if walker_transform.rotation.yaw == 180 else real_start.x + spacing + spacing,
-        y=real_start.y + offset_y,
-        z=1.0
-    )
-    veh3_rot = carla.Rotation(yaw=walker_transform.rotation.yaw)
-
-    obstacle1 = world.try_spawn_actor(obstacle_bp, carla.Transform(veh1_loc, veh1_rot))
-    obstacle2 = world.try_spawn_actor(obstacle_bp, carla.Transform(veh2_loc, veh2_rot))
-    obstacle3 = world.try_spawn_actor(obstacle_bp, carla.Transform(veh3_loc, veh3_rot))
-
-    if obstacle1:
-        obstacle1.set_autopilot(False)
-    if obstacle2:
-        obstacle2.set_autopilot(False)
-    if obstacle3:
-        obstacle3.set_autopilot(False)
-
-    print(f"[OBSTACLES] Spawned two parked vehicles at y={pedestrian_start.y + offset_y:.1f}")
-
-
-    def pedestrian_control(x=1, y=0, z=0):
+    def pedestrian_control(x=-1, y=0, z=0):
         ctrl = carla.WalkerControl()
         ctrl.speed = WALKER_SPEED
         ctrl.direction = carla.Vector3D(x, y, z)
@@ -989,7 +988,7 @@ if walker:
                 break
 
     def move_pedestrian(world, walker):
-        ctrl = pedestrian_control(-1, 0, 0)
+        ctrl = pedestrian_control(0, 1, 0)
         threading.Thread(target=_move_pedestrian, args=(world, walker, ctrl), daemon=True).start()
 
     move_pedestrian(world, walker)
