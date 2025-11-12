@@ -1,4 +1,5 @@
 scenario_name,code,speed_kmh,day_night,residual_speed_kmh,Automaton reaction time,4-second TTC reaction time,Automaton braking distance [m],Minimum distance from pedestrian [m],collision_count,with_pedestrian,emergency_brake_count,total_stops,NCAP points,collision_rate,emergency_brake_rate
-metrics_test1,CPFA,25.0,Day,,0.38053107261657715,1.5569828510284425,,,0,0.0,0,0,100.0,0.0,
-metrics_test1,CPFA,40.0,Day,,0.38357067108154297,0.8522730350494385,,2.93902530670166,0,0.0,0,5,100.0,0.0,0.0
-metrics_test1,CPFA,50.0,Day,,0.324775242805481,0.729182243347168,,2.1272045135498048,0,0.0,5,5,100.0,0.0,1.0
+metrics_test1,CPFA,25.0,Day,,0.38081395626068115,1.5723681688308715,,4.2146406173706055,0,0.0,0,1,100.0,0.0,0.0
+metrics_test1,CPFA,40.0,Day,,0.372444740931193,0.9897994995117188,,2.597290802001953,0,0.0,2,10,100.0,0.0,0.2
+metrics_test1,CPFA,50.0,Day,,0.34036100705464684,0.9835498809814454,,1.8606109619140625,0,0.0,10,10,100.0,0.0,1.0
+metrics_test1,CPFA,60.0,Day,28.523759246231428,0.3248666048049927,0.5964620113372803,,0.5,10,1.0,11,11,100.0,1.0,1.0

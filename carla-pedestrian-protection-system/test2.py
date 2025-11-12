@@ -75,9 +75,9 @@ mild_brake_start_ts = 0.0
 mild_brake_start_loc = None
 speed_before_mild_brake = 0.0
 
-TH_TTC_S = 5000   # Safe
-TH_TTC_R = 2500   # Risky
-TH_TTC_C = 1100   # Critical
+TH_TTC_S = 4000   # Safe
+TH_TTC_R = 2000   # Risky
+TH_TTC_C = 1000 
 
 ttc_safe_start = None
 ttc_risky_start = None
@@ -160,9 +160,7 @@ def mqtt_processor():
             with mqtt_lock:
                 if current_action == "brake":
                         level_intensity += 1
-                        level_brk = smooth_increase(level_brk, level_intensity, 0.007, velocity)
-                        print(level_brk)
-            
+                        level_brk = smooth_increase(level_brk, level_intensity, 0.007, velocity)            
         except Exception as e:
             print("[MQTT] Error in processor:", e)
 
@@ -330,6 +328,11 @@ def get_current_action():
     with mqtt_lock:
         return current_action
 
+enter = False
+complete_mild = False
+complete_brake = False
+complete_emergency = False
+
 def process_image():
     global input_rgb_image, input_depth_image, processed_output, velocity
     global d_min_current, d_min_records, is_braking_active, d_min_action
@@ -339,7 +342,8 @@ def process_image():
     global brake_active, mild_brake_active, emergency_brake_active
     global metrics, prev_action, walker
     global ttc_trigger_time, ttc_trigger_action
-    global steps, distance, braked
+    global steps, distance, braked, enter
+    global complete_brake, complete_emergency, complete_mild
     
     last_inference_time = 0.0
     target_dt = 0.105  # 10Hz
@@ -394,20 +398,26 @@ def process_image():
         conf = closest_ped.confidence if closest_ped else 0.0
 
         with ttc_lock:
-            if local_action == "mild_brake" and ttc_safe_start is not None and prev_action != current_action:
+            if local_action == "mild_brake" and ttc_safe_start is not None and prev_action != current_action and not complete_mild:
                 reaction_time = time.time() - ttc_safe_start
                 metrics["reaction_times_ttc_based"]["mild_brake"].append(reaction_time)
-                ttc_safe_start = None
+                complete_mild = True
 
-            elif local_action == "brake" and ttc_risky_start is not None and prev_action != current_action:
+            elif local_action == "brake" and ttc_risky_start is not None and prev_action != current_action and not complete_brake:
                 reaction_time = time.time() - ttc_risky_start
                 metrics["reaction_times_ttc_based"]["brake"].append(reaction_time)
-                ttc_risky_start = None 
+                complete_brake = True
+                ttc_safe_start = None
+                complete_mild = True
 
-            elif local_action == "emergency_brake" and ttc_critical_start is not None and prev_action != current_action:
+            elif local_action == "emergency_brake" and ttc_critical_start is not None and prev_action != current_action and not complete_emergency:
                 reaction_time = time.time() - ttc_critical_start
                 metrics["reaction_times_ttc_based"]["emergency_brake"].append(reaction_time)
-                ttc_critical_start = None
+                complete_emergency = True
+                complete_mild = True
+                complete_brake = True
+                ttc_risky_start = None
+                ttc_safe_start = None
 
         if closest_ped:
             yaw_rad = closest_ped.yaw
@@ -423,7 +433,6 @@ def process_image():
         else:
             yaw, pitch, ttc_camera, crossing = None, None, None, 0
             
-
         if  steps and distance and distance > steps and ttc_trigger_time is None:
             ttc_trigger_time = time.time()
             ttc_trigger_action = "pending"
@@ -441,10 +450,10 @@ def process_image():
             "camera_distance": closest_ped.distance if closest_ped else None,
             "camera_yaw_deg": math.degrees(yaw) if yaw is not None else None,
             "camera_pitch_deg": math.degrees(pitch) if pitch is not None else None,
-            "ttc": ttc_camera if conf else 10000,
+            "ttc": ttc_camera if conf and crossing else 10000,
             "is_crossing": crossing if conf else 0
         }
-
+        
         with ttc_lock:
             if ttc_camera and ttc_camera > TH_TTC_S:
                 emergency_brake_active = False
@@ -453,18 +462,12 @@ def process_image():
             if ttc_camera and ttc_camera < float('inf') and crossing:
                 if ttc_camera < TH_TTC_C and ttc_critical_start is None and not emergency_brake_active:
                     ttc_critical_start = time.time()
-                    ttc_safe_start = None
-                    ttc_risky_start = None
                     emergency_brake_active = True
                 elif ttc_camera < TH_TTC_R and ttc_risky_start is None and ttc_critical_start is None and not brake_active:
                     ttc_risky_start = time.time()
-                    ttc_safe_start = None
-                    ttc_critical_start = None
                     brake_active = True
                 elif ttc_camera < TH_TTC_S and ttc_safe_start is None and ttc_risky_start is None and ttc_critical_start is None and not mild_brake_active:
                     ttc_safe_start = time.time()
-                    ttc_critical_start = None
-                    ttc_risky_start = None
                     mild_brake_active = True
 
         if(ttc_camera and ttc_camera < 4000 or braked):
@@ -484,12 +487,17 @@ def process_image():
                 d_min_action = local_action
 
         elif is_braking_active and local_action not in ("brake", "emergency_brake"):
+            enter = True
+            is_braking_active = False
+            d_min_current = float('inf')
+            brake_start_loc = None
+
+        if enter and velocity<0.1:
             stop_loc = vehicle.get_location()
             stopping_distance = brake_start_loc.distance(stop_loc) if brake_start_loc and stop_loc else None
 
-            distace = abs(5 - stop_loc.y) - 2
-            distace = max(0.3, distace)
-
+            distace = abs(5 - stop_loc.y) - 3
+            distace = max(0.5, distace)
             d_min_records.append({
                 "timestamp": time.time(),
                 "action": d_min_action if d_min_action else "unknown",
@@ -497,11 +505,10 @@ def process_image():
                 "stopping_distance": stopping_distance if stopping_distance else None,
                 "speed_before_brake": speed_before_brake if speed_before_brake else None
             })
-            is_braking_active = False
-            d_min_current = float('inf')
-            brake_start_loc = None
+            print(velocity, distace)
             stopping_distance = None
             speed_before_brake = 0.0
+            enter = False
 
         if local_action == "mild_brake":
             if not is_mild_brake_active:
@@ -512,16 +519,6 @@ def process_image():
         else:
             if is_mild_brake_active:
                 stop_loc = vehicle.get_location()
-                distance_travelled = mild_brake_start_loc.distance(stop_loc) if mild_brake_start_loc and stop_loc else None
-                duration = time.time() - mild_brake_start_ts
-
-                # metrics["mild_brake"].append({
-                #     "timestamp": time.time(),
-                #     "speed_before_mild_brake": speed_before_mild_brake,
-                #     "duration": duration,
-                #     "distance_travelled": distance_travelled
-                # })
-
                 is_mild_brake_active = False
                 mild_brake_start_ts = 0.0
                 mild_brake_start_loc = None
@@ -533,7 +530,7 @@ def process_image():
                 "detections": detections
             }
         with ttc_lock:
-            prev_action = local_action
+            prev_action = get_current_action()
 
 def adas_active(action: str) -> bool:
     return action not in ("normal", "warning")
@@ -975,4 +972,16 @@ try:
 except KeyboardInterrupt:
     pass
 finally:
+    for i in range(12):
+        payload = {
+            "timestamp": time.time(),
+            "vehicle_speed": 0,
+            "confidence": float(0.0),
+            "camera_distance": None,
+            "camera_yaw_deg": None,
+            "camera_pitch_deg": None,
+            "ttc": 10000,
+            "is_crossing": 0
+        }
+        send_mqtt_async(payload)
     cleanup()

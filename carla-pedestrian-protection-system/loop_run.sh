@@ -1,8 +1,8 @@
 #!/bin/bash
 
 SCRIPT="test1.py"
-ITER=50
-SPEEDS=(25 40 50)
+ITER=10
+SPEEDS=(30 50)
 
 echo "🔁 Avvio loop_run.sh (PID principale: $$)"
 echo "   → Puoi interrompere tutto in qualsiasi momento con: kill -INT $$"
@@ -12,11 +12,11 @@ for SPEED in "${SPEEDS[@]}"; do
 
     # Imposta WAIT_TIME in base alla velocità
     if [[ $SPEED -eq 50 ]]; then
-        WAIT_TIME=15
-    elif [[ $SPEED -eq 40 ]]; then
         WAIT_TIME=16
+    elif [[ $SPEED -eq 40 ]]; then
+        WAIT_TIME=17
     else
-        WAIT_TIME=18
+        WAIT_TIME=19
     fi
 
     echo "Avvio batch da $ITER run a ${SPEED} km/h (timeout: ${WAIT_TIME}s)"

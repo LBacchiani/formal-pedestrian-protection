@@ -27,9 +27,22 @@ def load_all_logs(folder):
 
 df = load_all_logs(INPUT_DIR)
 
+all_rt = {"mild_brake": [], "brake": [], "emergency_brake": []}
+
+for _, row in df.iterrows():
+    rt_dict = row.get("reaction_times_ttc_based", {}) or {}
+    for k in all_rt.keys():
+        all_rt[k] += rt_dict.get(k, []) or []
+
+global_means = {k: (np.mean(v) if v else None) for k, v in all_rt.items()}
+
+# Converti in DataFrame per salvare insieme al resto
+global_df = pd.DataFrame([global_means])
+global_df["type"] = "Global Mean (reaction_times_ttc_based)"
+print("[INFO] Global reaction time means:", global_means)
+
 def extract_metrics(row):
     scen = row.get("scenario", {}) or {}
-    print(scen)
     speed_kmh = scen.get("speed_kmh")
     is_day = scen.get("is_day", True)
     stop_events = row.get("stop_events", [])
