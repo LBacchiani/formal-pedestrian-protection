@@ -7,13 +7,13 @@ import matplotlib.pyplot as plt
 
 
 INPUT_DIR = "./logs"
-OUTPUT_DIR = "./results1"
+OUTPUT_DIR = "./results4"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def load_all_logs(folder):
     records = []
     for filename in os.listdir(folder):
-        if filename.endswith("1.jsonl"):
+        if filename.endswith("4.jsonl"):
             scenario_name = filename.replace(".jsonl", "")
             with open(os.path.join(folder, filename), "r", encoding="utf-8") as f:
                 for line in f:
@@ -118,6 +118,7 @@ def compute_scenario_score(row):
 
 metrics_df = df.apply(extract_metrics, axis=1)
 metrics_df.dropna(subset=["speed_kmh"], inplace=True)
+metrics_df = metrics_df[(metrics_df["d_min"].isna()) | (metrics_df["d_min"] < 15)]
 metrics_df["day_night"] = metrics_df["is_day"].map({True: "Day", False: "Night"})
 metrics_df["points_ncap"] = metrics_df.apply(compute_scenario_score, axis=1)
 

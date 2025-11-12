@@ -2,7 +2,7 @@
 
 SCRIPTS=("test1.py" "test2.py" "test3.py" "test4_o.py" "test4_s.py")
 
-ITER=15
+ITER=100
 
 echo "Avvio loop multiplo (PID principale: $$)"
 echo "   → Puoi interrompere tutto in qualsiasi momento con: kill -INT $$"
