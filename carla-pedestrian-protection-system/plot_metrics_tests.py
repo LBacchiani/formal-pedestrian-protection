@@ -181,7 +181,7 @@ for scen, group in agg_metrics.groupby("scenario_name"):
             y="d_min",
             hue="day_night",
             palette="coolwarm",
-            fliersize=3,      # dimensione dei punti outlier
+            showfliers = False,
             linewidth=1.2,    # spessore linee box
             width=0.6
         )
@@ -204,7 +204,7 @@ for scen, group in agg_metrics.groupby("scenario_name"):
             y="reaction_time_ttc_mean",
             hue="day_night",
             palette="crest",
-            fliersize=3,
+            showfliers=False,
             linewidth=1.2,
             width=0.6
         )
@@ -227,7 +227,7 @@ for scen, group in agg_metrics.groupby("scenario_name"):
             y="reaction_time_sim_mean",
             hue="day_night",
             palette="mako",
-            fliersize=3,
+            showfliers=False,
             linewidth=1.2,
             width=0.6
         )

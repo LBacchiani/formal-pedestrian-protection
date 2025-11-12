@@ -6,7 +6,7 @@ def smooth_increase(level_brk, level_intensity, rate, speed):
     max_speed = 50.0
     speed_factor = min(speed / max_speed, 1.0)
 
-    if speed < 7:
+    if speed < 10:
         # a basse velocità decresce lentamente
         delta = -100
     else:

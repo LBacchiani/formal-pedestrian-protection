@@ -139,6 +139,14 @@ def mqtt_processor():
             payload = json.loads(payload_raw.decode())
 
             action = payload.get("action", "").lower()
+            reception_time = payload.get("send", "")
+            automaton_time = payload.get("aut", "")
+            return_time = time.time() - float(payload.get("ret", ""))
+
+            t["times"]["reception_time"].append(float(reception_time))
+            t["times"]["automaton_time"].append(float(automaton_time))
+            t["times"]["return_time"].append(float(return_time))
+
             lvl = payload.get("level", None)
 
             if lvl is not None:
@@ -248,6 +256,12 @@ metrics = {
         "mild_brake": [], "brake": [], "emergency_brake": []
     },
     "stop_events": []
+}
+
+t = {
+    "times": {
+        "reception_time": [], "automaton_time": [], "return_time": []
+    },
 }
 
 
@@ -378,15 +392,15 @@ def process_image():
         detected_pedestrians: List[Pedestrian] = []
 
         for conf, _, centroid in detections:
-            distance = max(0.5, get_distance_to_pedestrian_centroid(centroid, depth_array) - FRONT_CAR_LENGTH)
+            ds = max(0.2, get_distance_to_pedestrian_centroid(centroid, depth_array) - FRONT_CAR_LENGTH)
             yaw, pitch = pixel_to_angle(centroid[0], centroid[1], rgb_camera.calibration)
 
-            time_to_collision = (distance / velocity * 1000.0) if velocity > 0.01 else float('inf')
+            time_to_collision = (ds / velocity * 1000.0) if velocity > 0.01 else float('inf')
 
             detected_pedestrians.append(Pedestrian(
                 x=centroid[0],
                 y=centroid[1],
-                distance=distance,
+                distance=ds,
                 time_to_collision=time_to_collision,
                 yaw=yaw,
                 pitch=pitch,
@@ -450,7 +464,7 @@ def process_image():
             "camera_distance": closest_ped.distance if closest_ped else None,
             "camera_yaw_deg": math.degrees(yaw) if yaw is not None else None,
             "camera_pitch_deg": math.degrees(pitch) if pitch is not None else None,
-            "ttc": ttc_camera if conf and crossing else 10000,
+            "ttc": ttc_camera if conf else 10000,
             "is_crossing": crossing if conf else 0
         }
         
@@ -505,7 +519,6 @@ def process_image():
                 "stopping_distance": stopping_distance if stopping_distance else None,
                 "speed_before_brake": speed_before_brake if speed_before_brake else None
             })
-            print(velocity, distace)
             stopping_distance = None
             speed_before_brake = 0.0
             enter = False
@@ -888,13 +901,16 @@ global distance
 
 if VEHICLE_SPEED == 50.0:
     pedestrian_start = carla.Location(x=-29.5, y=5.0, z=1.0)
-    steps = 15
+    steps = 7
 elif VEHICLE_SPEED == 40.0:
     pedestrian_start = carla.Location(x=-27.5, y=5.0, z=1.0)
-    steps = 18
+    steps = 9
+elif VEHICLE_SPEED == 30.0:
+    pedestrian_start = carla.Location(x=-25.5, y=5.0, z=1.0)
+    steps = 11
 else:
     pedestrian_start = carla.Location(x=-21.0, y=5.0, z=1.0)
-    steps = 29
+    steps = 15
 
 bp_lib = world.get_blueprint_library()
 walker_bp = bp_lib.find('walker.pedestrian.0042')
@@ -985,3 +1001,5 @@ finally:
         }
         send_mqtt_async(payload)
     cleanup()
+    with open("logs/mqtt_times.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(t) + "\n")

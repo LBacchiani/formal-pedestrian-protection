@@ -378,15 +378,15 @@ def process_image():
         detected_pedestrians: List[Pedestrian] = []
 
         for conf, _, centroid in detections:
-            distance = max(0.5, get_distance_to_pedestrian_centroid(centroid, depth_array) - FRONT_CAR_LENGTH)
+            ds = max(0.2, get_distance_to_pedestrian_centroid(centroid, depth_array) - FRONT_CAR_LENGTH)
             yaw, pitch = pixel_to_angle(centroid[0], centroid[1], rgb_camera.calibration)
 
-            time_to_collision = (distance / velocity * 1000.0) if velocity > 0.01 else float('inf')
+            time_to_collision = (ds / velocity * 1000.0) if velocity > 0.01 else float('inf')
 
             detected_pedestrians.append(Pedestrian(
                 x=centroid[0],
                 y=centroid[1],
-                distance=distance,
+                distance=ds,
                 time_to_collision=time_to_collision,
                 yaw=yaw,
                 pitch=pitch,
@@ -450,7 +450,7 @@ def process_image():
             "camera_distance": closest_ped.distance if closest_ped else None,
             "camera_yaw_deg": math.degrees(yaw) if yaw is not None else None,
             "camera_pitch_deg": math.degrees(pitch) if pitch is not None else None,
-            "ttc": ttc_camera if conf and crossing else 10000,
+            "ttc": ttc_camera if conf else 10000,
             "is_crossing": crossing if conf else 0
         }
         
@@ -496,8 +496,8 @@ def process_image():
             stop_loc = vehicle.get_location()
             stopping_distance = brake_start_loc.distance(stop_loc) if brake_start_loc and stop_loc else None
 
-            distace = abs(5 - stop_loc.y) - 3
-            distace = max(0.5, distace)
+            distace = abs(-33 - stop_loc.x) - 2
+            distace = max(0.1, distace)
             d_min_records.append({
                 "timestamp": time.time(),
                 "action": d_min_action if d_min_action else "unknown",
@@ -505,7 +505,6 @@ def process_image():
                 "stopping_distance": stopping_distance if stopping_distance else None,
                 "speed_before_brake": speed_before_brake if speed_before_brake else None
             })
-            print(velocity, distace)
             stopping_distance = None
             speed_before_brake = 0.0
             enter = False
@@ -935,7 +934,7 @@ global distance
 
 if VEHICLE_SPEED == 10.0:
     pedestrian_start = carla.Location(x=-33.0, y=87.5, z=1.0)
-    steps = 29
+    steps = 12
 
 bp_lib = world.get_blueprint_library()
 walker_bp = bp_lib.find('walker.pedestrian.0042')

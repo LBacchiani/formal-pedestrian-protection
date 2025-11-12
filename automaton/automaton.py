@@ -30,7 +30,7 @@ TH_D_STALE = 300
 TH_C_STALE = 300
 
 # Time-to-collision thresholds (seconds)
-TH_TTC_S = 4000   # Safe
+TH_TTC_S = 3500   # Safe
 TH_TTC_R = 2000   # Risky
 TH_TTC_C = 1000   # Critical
 

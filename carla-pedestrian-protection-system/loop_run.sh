@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT="test1.py"
-ITER=10
+ITER=20
 SPEEDS=(30 50)
 
 echo "🔁 Avvio loop_run.sh (PID principale: $$)"
@@ -15,6 +15,8 @@ for SPEED in "${SPEEDS[@]}"; do
         WAIT_TIME=16
     elif [[ $SPEED -eq 40 ]]; then
         WAIT_TIME=17
+    elif [[ $SPEED -eq 30 ]]; then
+        WAIT_TIME=18
     else
         WAIT_TIME=19
     fi

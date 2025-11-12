@@ -1,6 +1,7 @@
 import json
 import paho.mqtt.client as mqtt
 from automaton import PedestrianProtectionAutomaton  # assuming your automaton is in this module
+import time
 
 # ============================================================================
 # MQTT CONFIGURATION
@@ -34,19 +35,23 @@ def on_message(client, userdata, msg):
         data = json.loads(payload)
         
         # Extract expected fields
+        ric = time.time() - data.get("timestamp") 
         confidence = data.get("confidence")      # float [0,1]
         ttc = data.get("ttc")                    # float seconds
         is_crossing = data.get("is_crossing")    # int {0,1}
         # print(f"Received data: confidence={confidence}, ttc={ttc}, is_crossing={is_crossing}")
         
+        st = time.time()
         # Update automaton with new data
         automaton.update_data(confidence=confidence, ttc=ttc, is_crossing=is_crossing)
         # Perform a step
         action = automaton.step()
+        aut = time.time() - st
         
         # Print or handle action
         # print(f"Automaton state: {automaton.state.value}, Action: {action.value}")
-        client.publish(PUB_TOPIC, json.dumps({"action": action.value}))
+        sen = time.time()
+        client.publish(PUB_TOPIC, json.dumps({"action": action.value, "send": ric, "aut": aut, "ret": sen}))
 
     
     except Exception as e:
