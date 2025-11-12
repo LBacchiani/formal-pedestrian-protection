@@ -138,6 +138,14 @@ def mqtt_processor():
             payload_raw = mqtt_queue.get()
             payload = json.loads(payload_raw.decode())
 
+            reception_time = payload.get("send", "")
+            automaton_time = payload.get("aut", "")
+            return_time = time.time() - float(payload.get("ret", ""))
+
+            t["times"]["reception_time"].append(float(reception_time))
+            t["times"]["automaton_time"].append(float(automaton_time))
+            t["times"]["return_time"].append(float(return_time))
+
             action = payload.get("action", "").lower()
             lvl = payload.get("level", None)
 
@@ -250,6 +258,11 @@ metrics = {
     "stop_events": []
 }
 
+t = {
+    "times": {
+        "reception_time": [], "automaton_time": [], "return_time": []
+    },
+}
 
 input_rgb_image = None
 input_rgb_image_lock = threading.Lock()
@@ -987,3 +1000,5 @@ finally:
         }
         send_mqtt_async(payload)
     cleanup()
+    with open("logs/mqtt_times.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(t) + "\n")

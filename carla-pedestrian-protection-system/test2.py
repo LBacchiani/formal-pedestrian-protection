@@ -75,7 +75,7 @@ mild_brake_start_ts = 0.0
 mild_brake_start_loc = None
 speed_before_mild_brake = 0.0
 
-TH_TTC_S = 4000   # Safe
+TH_TTC_S = 3500   # Safe
 TH_TTC_R = 2000   # Risky
 TH_TTC_C = 1000 
 
@@ -447,7 +447,7 @@ def process_image():
         else:
             yaw, pitch, ttc_camera, crossing = None, None, None, 0
             
-        if  steps and distance and distance > steps and ttc_trigger_time is None:
+        if  steps and distance and (distance > steps or crossing) and ttc_trigger_time is None:
             ttc_trigger_time = time.time()
             ttc_trigger_action = "pending"
 
@@ -484,7 +484,7 @@ def process_image():
                     ttc_safe_start = time.time()
                     mild_brake_active = True
 
-        if(ttc_camera and ttc_camera < 4000 or braked):
+        if(ttc_camera and ttc_camera <= 4000 or braked):
             send_mqtt_async(payload)
 
         closest_distance = closest_ped.distance if closest_ped else None
@@ -511,7 +511,7 @@ def process_image():
             stopping_distance = brake_start_loc.distance(stop_loc) if brake_start_loc and stop_loc else None
 
             distace = abs(5 - stop_loc.y) - 3
-            distace = max(0.5, distace)
+            distace = max(0.2, distace)
             d_min_records.append({
                 "timestamp": time.time(),
                 "action": d_min_action if d_min_action else "unknown",
