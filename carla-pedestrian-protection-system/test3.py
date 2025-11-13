@@ -19,9 +19,11 @@ from ultralytics import YOLO
 from dataclasses import dataclass
 from typing import List
 from utils import smooth_increase, max_yaw_allowed, pixel_to_angle, get_distance_to_pedestrian_centroid
+from carla import VehicleLightState as vls
 from agents.navigation.basic_agent import BasicAgent
 import manual_control as mc
 import argparse
+
 
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument("-s", "--speed", "--speed-kmh",
@@ -189,14 +191,14 @@ weather = carla.WeatherParameters(
     cloudiness=0.0
 )
 
-weather = carla.WeatherParameters(
-    cloudiness=0.0,         # very cloudy sky
-    precipitation=0.0,       # rain
-    precipitation_deposits=0.0, # puddles
-    wind_intensity=0.0,      # wind
-    sun_altitude_angle=90.0, # below horizon = night
-    fog_density=0.0,         # fog density (0–100)
-)
+# weather = carla.WeatherParameters(
+#     cloudiness=0.0,         # very cloudy sky
+#     precipitation=0.0,       # rain
+#     precipitation_deposits=0.0, # puddles
+#     wind_intensity=0.0,      # wind
+#     sun_altitude_angle=90.0, # below horizon = night
+#     fog_density=0.0,         # fog density (0–100)
+# )
 # weather = carla.WeatherParameters(
 #     cloudiness=90.0,         # very cloudy sky
 #     precipitation=0.0,       # rain
@@ -205,16 +207,15 @@ weather = carla.WeatherParameters(
 #     sun_altitude_angle=-20.0, # below horizon = night
 #     fog_density=0.0,         # fog density (0–100)
 # )
-# weather = carla.WeatherParameters(
-#     cloudiness=90.0,         # very cloudy sky
-#     precipitation=80.0,      # heavy rain
-#     precipitation_deposits=80.0, # puddles
-#     wind_intensity=60.0,     # medium-strong wind
-#     sun_altitude_angle=-20.0, # below horizon = night
-#     fog_density=70.0,        # fog density (0–100)
-#     fog_distance=20.0,       # max visibility in meters
-#     fog_falloff=1.5          # how much fog intensifies with distance
-# )
+weather = carla.WeatherParameters(
+    cloudiness=90.0,         # very cloudy sky
+    precipitation=0.0,      # heavy rain
+    precipitation_deposits=0.0, # puddles
+    wind_intensity=0.0,     # medium-strong wind
+    sun_altitude_angle=0.5, # below horizon = night
+    fog_density=100.0,        # fog density (0–100)
+    fog_distance=50.0,       # max visibility in meters
+)
 
 world.set_weather(weather)
 
@@ -238,7 +239,7 @@ metrics = {
             "fog_distance": weather.fog_distance,
             "fog_falloff": weather.fog_falloff
         },
-        "is_day": (weather.sun_altitude_angle >= 0),
+        "is_day": (weather.sun_altitude_angle >= 2),
         "speed_kmh": VEHICLE_SPEED
     },
     "scenario_name" : SCENARIO_NAME,
@@ -510,8 +511,12 @@ def process_image():
             stop_loc = vehicle.get_location()
             stopping_distance = brake_start_loc.distance(stop_loc) if brake_start_loc and stop_loc else None
 
-            distace = abs(5 - stop_loc.y) - 3
-            distace = max(0.2, distace)
+            r_max = 5 - stop_loc.y
+            if r_max <= 0:
+                distace = abs(5 - stop_loc.y) - 3
+                distace = max(0.2, distace)
+            else:
+                distace = 0
             d_min_records.append({
                 "timestamp": time.time(),
                 "action": d_min_action if d_min_action else "unknown",
@@ -885,6 +890,7 @@ destination = carla.Location(x=-41.5, y=-50.0, z=1.0)
 bp_lib = world.get_blueprint_library()
 vehicle_bp = bp_lib.find('vehicle.mercedes.coupe_2020')
 vehicle = world.try_spawn_actor(vehicle_bp, carla.Transform(start, carla.Rotation(yaw=-90)))
+vehicle.set_light_state(vls(vls.Position | vls.LowBeam | vls.HighBeam))
 world.tick()
 
 game_loop = setup(vehicle)
@@ -907,14 +913,14 @@ elif VEHICLE_SPEED == 40.0:
     pedestrian_start = carla.Location(x=-27.5, y=5.0, z=1.0)
     steps = 9
 elif VEHICLE_SPEED == 30.0:
-    pedestrian_start = carla.Location(x=-25.5, y=5.0, z=1.0)
+    pedestrian_start = carla.Location(x=-24.5, y=5.0, z=1.0)
     steps = 11
 else:
     pedestrian_start = carla.Location(x=-21.0, y=5.0, z=1.0)
     steps = 15
 
 bp_lib = world.get_blueprint_library()
-walker_bp = bp_lib.find('walker.pedestrian.0049')
+walker_bp = bp_lib.find('walker.pedestrian.0048')
 
 if walker_bp.has_attribute('is_invincible'):
     walker_bp.set_attribute('is_invincible', 'false')

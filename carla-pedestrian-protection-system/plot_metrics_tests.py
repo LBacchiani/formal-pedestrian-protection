@@ -7,13 +7,13 @@ import matplotlib.pyplot as plt
 
 
 INPUT_DIR = "./logs"
-OUTPUT_DIR = "./results4"
+OUTPUT_DIR = "./results1"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def load_all_logs(folder):
     records = []
     for filename in os.listdir(folder):
-        if filename.endswith("4.jsonl"):
+        if filename.endswith("1.jsonl"):
             scenario_name = filename.replace(".jsonl", "")
             with open(os.path.join(folder, filename), "r", encoding="utf-8") as f:
                 for line in f:
@@ -56,21 +56,31 @@ def extract_metrics(row):
         try:
             stop_df = pd.DataFrame(stop_events)
             total_stops = len(stop_df)
+
             if "action" in stop_df.columns:
                 emergency_brake_count = (stop_df["action"] == "emergency_brake").sum()
+
             if "stopping_distance" in stop_df.columns:
                 stop_distance = stop_df["stopping_distance"].mean()
+
             if "d_min" in stop_df.columns:
                 d_min_value = stop_df["d_min"].mean()
+            else:
+                d_min_value = None
+
         except Exception:
             pass
 
+    # ---- FORCE d_min = 0 ON COLLISION ----
+    collisions = row.get("collisions", {}) or {}
+    if collisions.get("with_pedestrian", 0) > 0:
+        d_min_value = 0.0
+
+    # Reaction times
     rt_ttc, rt_sim = [], []
     for a in ("mild_brake", "brake", "emergency_brake"):
         rt_ttc += row.get("reaction_times_ttc_based", {}).get(a, []) or []
         rt_sim += row.get("reaction_times_simulation", {}).get(a, []) or []
-
-    collisions = row.get("collisions", {}) or {}
 
     return pd.Series({
         "code": row.get("code"),
@@ -88,6 +98,7 @@ def extract_metrics(row):
         "emergency_brake_count": emergency_brake_count,
         "total_stops": total_stops
     })
+
 
 def compute_scenario_score(row):
     import numpy as np
