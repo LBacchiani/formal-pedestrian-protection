@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPTS=("test1.py" "test2.py")
+SCRIPTS=("test3.py")
 
 ITER=100
 

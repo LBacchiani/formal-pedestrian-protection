@@ -920,7 +920,7 @@ else:
     steps = 15
 
 bp_lib = world.get_blueprint_library()
-walker_bp = bp_lib.find('walker.pedestrian.0048')
+walker_bp = bp_lib.find('walker.pedestrian.0042')
 
 if walker_bp.has_attribute('is_invincible'):
     walker_bp.set_attribute('is_invincible', 'false')
@@ -931,10 +931,10 @@ walker = world.try_spawn_actor(walker_bp, walker_transform)
 if walker:
     world.tick()
     time.sleep(0.2)
-    real_start = carla.Location(x=-23.5, y=5.0, z=1.0)
+    real_start = carla.Location(x=-22.5, y=5.0, z=1.0)
 
         # === VEHICLES AS OBSTACLES (STATIC) ===
-    obstacle_bp = bp_lib.find('vehicle.tesla.model3')  # modello compatto
+    obstacle_bp = bp_lib.find('vehicle.carlamotors.carlacola')  # modello compatto
 
     # Calcola la direzione del pedone: stessa Y, ma i veicoli più spostati lateralmente
     # Se il pedone cammina verso sinistra (x decrescente), i veicoli stanno "sotto" (y + offset)
