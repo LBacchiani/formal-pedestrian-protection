@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPTS=("test2.py")
+SCRIPTS=("test3.py")
 
 ITER=100
 
@@ -18,7 +18,7 @@ for SCRIPT in "${SCRIPTS[@]}"; do
     elif [[ "$SCRIPT" == "test4_s.py" ]]; then
         SPEEDS=(10)
     else
-        SPEEDS=(30)
+        SPEEDS=(30 50)
     fi
 
     for SPEED in "${SPEEDS[@]}"; do
@@ -27,7 +27,7 @@ for SCRIPT in "${SCRIPTS[@]}"; do
         elif [[ $SPEED -eq 40 ]]; then
             WAIT_TIME=17
         elif [[ $SPEED -eq 30 ]]; then
-            WAIT_TIME=17
+            WAIT_TIME=18
         elif [[ $SPEED -eq 20 ]]; then
             WAIT_TIME=19
         else

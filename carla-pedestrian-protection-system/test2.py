@@ -243,7 +243,6 @@ metrics = {
     },
     "scenario_name" : SCENARIO_NAME,
 
-    # === Metriche chiave ===
     "residual_speed_kmh": None,
     "impact_force_N": None,
 
@@ -806,7 +805,6 @@ def collision_callback(event):
 
     metrics["collisions"]["count"] += 1
 
-    # Se colpisce un pedone → registra residuo e forza
     if actor_type.startswith("walker.pedestrian"):
         metrics["collisions"]["with_pedestrian"] = 1
         if metrics["residual_speed_kmh"] is None:

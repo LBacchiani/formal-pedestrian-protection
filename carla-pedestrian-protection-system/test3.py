@@ -191,14 +191,14 @@ weather = carla.WeatherParameters(
     cloudiness=0.0
 )
 
-weather = carla.WeatherParameters(
-    cloudiness=0.0,         # very cloudy sky
-    precipitation=0.0,       # rain
-    precipitation_deposits=0.0, # puddles
-    wind_intensity=0.0,      # wind
-    sun_altitude_angle=90.0, # below horizon = night
-    fog_density=0.0,         # fog density (0–100)
-)
+# weather = carla.WeatherParameters(
+#     cloudiness=0.0,         # very cloudy sky
+#     precipitation=0.0,       # rain
+#     precipitation_deposits=0.0, # puddles
+#     wind_intensity=0.0,      # wind
+#     sun_altitude_angle=90.0, # below horizon = night
+#     fog_density=0.0,         # fog density (0–100)
+# )
 # weather = carla.WeatherParameters(
 #     cloudiness=90.0,         # very cloudy sky
 #     precipitation=0.0,       # rain
@@ -207,15 +207,15 @@ weather = carla.WeatherParameters(
 #     sun_altitude_angle=-20.0, # below horizon = night
 #     fog_density=0.0,         # fog density (0–100)
 # )
-# weather = carla.WeatherParameters(
-#     cloudiness=90.0,         # very cloudy sky
-#     precipitation=0.0,      # heavy rain
-#     precipitation_deposits=0.0, # puddles
-#     wind_intensity=0.0,     # medium-strong wind
-#     sun_altitude_angle=0.5, # below horizon = night
-#     fog_density=100.0,        # fog density (0–100)
-#     fog_distance=50.0,       # max visibility in meters
-# )
+weather = carla.WeatherParameters(
+    cloudiness=90.0,         # very cloudy sky
+    precipitation=0.0,      # heavy rain
+    precipitation_deposits=0.0, # puddles
+    wind_intensity=0.0,     # medium-strong wind
+    sun_altitude_angle=0.5, # below horizon = night
+    fog_density=100.0,        # fog density (0–100)
+    fog_distance=50.0,       # max visibility in meters
+)
 
 world.set_weather(weather)
 
@@ -244,7 +244,6 @@ metrics = {
     },
     "scenario_name" : SCENARIO_NAME,
 
-    # === Metriche chiave ===
     "residual_speed_kmh": None,
     "impact_force_N": None,
 
@@ -808,7 +807,6 @@ def collision_callback(event):
 
     metrics["collisions"]["count"] += 1
 
-    # Se colpisce un pedone → registra residuo e forza
     if actor_type.startswith("walker.pedestrian"):
         metrics["collisions"]["with_pedestrian"] = 1
         if metrics["residual_speed_kmh"] is None:
@@ -931,28 +929,24 @@ walker = world.try_spawn_actor(walker_bp, walker_transform)
 if walker:
     world.tick()
     time.sleep(0.2)
-    # === STATIC OBSTACLES ALONG CAR LANE ===
     obstacle_bp = bp_lib.find('vehicle.carlamotors.carlacola')
 
-    # Parametri
-    lane_offset = 4.0      # distanza laterale dal centro della corsia (verso bordo strada)
-    spacing = 3.0         # distanza tra un veicolo e il successivo
-    num_obstacles = 5      # quanti veicoli in fila
+    lane_offset = 4.0     
+    spacing = 3.0        
+    num_obstacles = 5      
 
-    # Coordinate della carreggiata della macchina
     car_x = start.x
     car_y = 10
 
-    # Direzione della macchina (fai l'assunzione che guardi a Sud: yaw = -90 o 90)
-    car_yaw = -90  # se il tuo veicolo effettivamente guarda verso il basso
-                # altrimenti usa vehicle.get_transform().rotation.yaw
+    car_yaw = -90  
+                
 
     obstacles = []
 
     for i in range(num_obstacles):
         loc = carla.Location(
-            x=car_x + lane_offset,      # spostati verso il bordo
-            y=car_y + i * spacing,      # metti in fila lungo la carreggiata
+            x=car_x + lane_offset,     
+            y=car_y + i * spacing,      
             z=1.0
         )
         rot = carla.Rotation(yaw=car_yaw)

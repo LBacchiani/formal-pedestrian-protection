@@ -56,7 +56,7 @@ def main():
     mean_ret = s_ret["mean"]
     total_time = mean_rec + mean_aut + mean_ret
 
-    print("\n=== RISULTATI STATISTICI DEI TEMPI MQTT ===\n")
+    print("\n=== STATISTICAL RESULTS OF MQTT TIMES ===\n")
 
     def print_stats(label, s):
         print(f"{label}:")
@@ -67,20 +67,13 @@ def main():
         print(f"    n:     {s['count']}")
         print()
 
-    print_stats("Reception_time  (sensori → automa)", s_rec)
-    print_stats("Automaton_time (processamento)", s_aut)
-    print_stats("Return_time     (automa → sensori)", s_ret)
+    print_stats("Reception_time  (sensors → automaton)", s_rec)
+    print_stats("Automaton_time (processing)", s_aut)
+    print_stats("Return_time     (automaton → sensors)", s_ret)
 
     print("-----------------------------------------")
-    print(f"Tempo totale medio (round trip): {total_time*1000:.3f} ms")
+    print(f"Average total time (round trip): {total_time*1000:.3f} ms")
     print("-----------------------------------------\n")
-
-    print("Interpretazione:")
-    print("- reception_time: quanto impiega il messaggio dai sensori a raggiungere l'automa")
-    print("- automaton_time: quanto impiega l'automa a processarlo")
-    print("- return_time: quanto impiega la risposta a tornare ai sensori come azione")
-    print("- std alto → molta instabilità; outlier da verificare")
-    print("- max molto superiore alla media → possibile congestione o ritardi a scatti\n")
 
 if __name__ == "__main__":
     main()
