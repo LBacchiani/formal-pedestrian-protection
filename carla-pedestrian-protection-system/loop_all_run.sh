@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPTS=("test3.py")
+SCRIPTS=("test2.py")
 
 ITER=100
 
@@ -18,7 +18,7 @@ for SCRIPT in "${SCRIPTS[@]}"; do
     elif [[ "$SCRIPT" == "test4_s.py" ]]; then
         SPEEDS=(10)
     else
-        SPEEDS=(30 50)
+        SPEEDS=(30)
     fi
 
     for SPEED in "${SPEEDS[@]}"; do

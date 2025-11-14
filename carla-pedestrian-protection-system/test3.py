@@ -191,14 +191,14 @@ weather = carla.WeatherParameters(
     cloudiness=0.0
 )
 
-# weather = carla.WeatherParameters(
-#     cloudiness=0.0,         # very cloudy sky
-#     precipitation=0.0,       # rain
-#     precipitation_deposits=0.0, # puddles
-#     wind_intensity=0.0,      # wind
-#     sun_altitude_angle=90.0, # below horizon = night
-#     fog_density=0.0,         # fog density (0–100)
-# )
+weather = carla.WeatherParameters(
+    cloudiness=0.0,         # very cloudy sky
+    precipitation=0.0,       # rain
+    precipitation_deposits=0.0, # puddles
+    wind_intensity=0.0,      # wind
+    sun_altitude_angle=90.0, # below horizon = night
+    fog_density=0.0,         # fog density (0–100)
+)
 # weather = carla.WeatherParameters(
 #     cloudiness=90.0,         # very cloudy sky
 #     precipitation=0.0,       # rain
@@ -207,15 +207,15 @@ weather = carla.WeatherParameters(
 #     sun_altitude_angle=-20.0, # below horizon = night
 #     fog_density=0.0,         # fog density (0–100)
 # )
-weather = carla.WeatherParameters(
-    cloudiness=90.0,         # very cloudy sky
-    precipitation=0.0,      # heavy rain
-    precipitation_deposits=0.0, # puddles
-    wind_intensity=0.0,     # medium-strong wind
-    sun_altitude_angle=0.5, # below horizon = night
-    fog_density=100.0,        # fog density (0–100)
-    fog_distance=50.0,       # max visibility in meters
-)
+# weather = carla.WeatherParameters(
+#     cloudiness=90.0,         # very cloudy sky
+#     precipitation=0.0,      # heavy rain
+#     precipitation_deposits=0.0, # puddles
+#     wind_intensity=0.0,     # medium-strong wind
+#     sun_altitude_angle=0.5, # below horizon = night
+#     fog_density=100.0,        # fog density (0–100)
+#     fog_distance=50.0,       # max visibility in meters
+# )
 
 world.set_weather(weather)
 
@@ -931,53 +931,39 @@ walker = world.try_spawn_actor(walker_bp, walker_transform)
 if walker:
     world.tick()
     time.sleep(0.2)
-    real_start = carla.Location(x=-22.5, y=5.0, z=1.0)
+    # === STATIC OBSTACLES ALONG CAR LANE ===
+    obstacle_bp = bp_lib.find('vehicle.carlamotors.carlacola')
 
-        # === VEHICLES AS OBSTACLES (STATIC) ===
-    obstacle_bp = bp_lib.find('vehicle.carlamotors.carlacola')  # modello compatto
+    # Parametri
+    lane_offset = 4.0      # distanza laterale dal centro della corsia (verso bordo strada)
+    spacing = 3.0         # distanza tra un veicolo e il successivo
+    num_obstacles = 5      # quanti veicoli in fila
 
-    # Calcola la direzione del pedone: stessa Y, ma i veicoli più spostati lateralmente
-    # Se il pedone cammina verso sinistra (x decrescente), i veicoli stanno "sotto" (y + offset)
-    # Se invece cammina verso destra, metti offset con y - offset
+    # Coordinate della carreggiata della macchina
+    car_x = start.x
+    car_y = 10
 
-    offset_y = 3.0   # distanza laterale dal percorso del pedone
-    spacing = 6.0    # distanza longitudinale tra i due veicoli
+    # Direzione della macchina (fai l'assunzione che guardi a Sud: yaw = -90 o 90)
+    car_yaw = -90  # se il tuo veicolo effettivamente guarda verso il basso
+                # altrimenti usa vehicle.get_transform().rotation.yaw
 
-    # Primo veicolo vicino al punto di spawn del pedone
-    veh1_loc = carla.Location(
-        x=real_start.x,
-        y=real_start.y + offset_y,
-        z=1.0
-    )
-    veh1_rot = carla.Rotation(yaw=walker_transform.rotation.yaw)  # stessa direzione del pedone
+    obstacles = []
 
-    # Secondo veicolo subito dietro
-    veh2_loc = carla.Location(
-        x=real_start.x - spacing if walker_transform.rotation.yaw == 180 else real_start.x + spacing,
-        y=real_start.y + offset_y,
-        z=1.0
-    )
-    veh2_rot = carla.Rotation(yaw=walker_transform.rotation.yaw)
+    for i in range(num_obstacles):
+        loc = carla.Location(
+            x=car_x + lane_offset,      # spostati verso il bordo
+            y=car_y + i * spacing,      # metti in fila lungo la carreggiata
+            z=1.0
+        )
+        rot = carla.Rotation(yaw=car_yaw)
 
-    veh3_loc = carla.Location(
-        x=real_start.x - spacing - spacing if walker_transform.rotation.yaw == 180 else real_start.x + spacing + spacing,
-        y=real_start.y + offset_y,
-        z=1.0
-    )
-    veh3_rot = carla.Rotation(yaw=walker_transform.rotation.yaw)
+        obst = world.try_spawn_actor(obstacle_bp, carla.Transform(loc, rot))
+        if obst:
+            obst.set_autopilot(False)
+            obstacles.append(obst)
 
-    obstacle1 = world.try_spawn_actor(obstacle_bp, carla.Transform(veh1_loc, veh1_rot))
-    obstacle2 = world.try_spawn_actor(obstacle_bp, carla.Transform(veh2_loc, veh2_rot))
-    obstacle3 = world.try_spawn_actor(obstacle_bp, carla.Transform(veh3_loc, veh3_rot))
+    print(f"[OBSTACLES] Spawned {len(obstacles)} parked cars along vehicle lane")
 
-    if obstacle1:
-        obstacle1.set_autopilot(False)
-    if obstacle2:
-        obstacle2.set_autopilot(False)
-    if obstacle3:
-        obstacle3.set_autopilot(False)
-
-    print(f"[OBSTACLES] Spawned two parked vehicles at y={pedestrian_start.y + offset_y:.1f}")
 
 
     def pedestrian_control(x=1, y=0, z=0):
