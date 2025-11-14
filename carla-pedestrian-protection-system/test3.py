@@ -191,14 +191,14 @@ weather = carla.WeatherParameters(
     cloudiness=0.0
 )
 
-# weather = carla.WeatherParameters(
-#     cloudiness=0.0,         # very cloudy sky
-#     precipitation=0.0,       # rain
-#     precipitation_deposits=0.0, # puddles
-#     wind_intensity=0.0,      # wind
-#     sun_altitude_angle=90.0, # below horizon = night
-#     fog_density=0.0,         # fog density (0–100)
-# )
+weather = carla.WeatherParameters(
+    cloudiness=0.0,         # very cloudy sky
+    precipitation=0.0,       # rain
+    precipitation_deposits=0.0, # puddles
+    wind_intensity=0.0,      # wind
+    sun_altitude_angle=90.0, # below horizon = night
+    fog_density=0.0,         # fog density (0–100)
+)
 # weather = carla.WeatherParameters(
 #     cloudiness=90.0,         # very cloudy sky
 #     precipitation=0.0,       # rain
@@ -207,15 +207,15 @@ weather = carla.WeatherParameters(
 #     sun_altitude_angle=-20.0, # below horizon = night
 #     fog_density=0.0,         # fog density (0–100)
 # )
-weather = carla.WeatherParameters(
-    cloudiness=90.0,         # very cloudy sky
-    precipitation=0.0,      # heavy rain
-    precipitation_deposits=0.0, # puddles
-    wind_intensity=0.0,     # medium-strong wind
-    sun_altitude_angle=0.5, # below horizon = night
-    fog_density=100.0,        # fog density (0–100)
-    fog_distance=50.0,       # max visibility in meters
-)
+# weather = carla.WeatherParameters(
+#     cloudiness=90.0,         # very cloudy sky
+#     precipitation=0.0,      # heavy rain
+#     precipitation_deposits=0.0, # puddles
+#     wind_intensity=0.0,     # medium-strong wind
+#     sun_altitude_angle=0.5, # below horizon = night
+#     fog_density=100.0,        # fog density (0–100)
+#     fog_distance=50.0,       # max visibility in meters
+# )
 
 world.set_weather(weather)
 
@@ -931,7 +931,7 @@ if walker:
     time.sleep(0.2)
     obstacle_bp = bp_lib.find('vehicle.carlamotors.carlacola')
 
-    lane_offset = 4.0     
+    lane_offset = 5     
     spacing = 3.0        
     num_obstacles = 5      
 
