@@ -7,13 +7,13 @@ import matplotlib.pyplot as plt
 
 
 INPUT_DIR = "./logs"
-OUTPUT_DIR = "./results3"
+OUTPUT_DIR = "./results2"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def load_all_logs(folder):
     records = []
     for filename in os.listdir(folder):
-        if filename.endswith("3.jsonl"):
+        if filename.endswith("2.jsonl"):
             scenario_name = filename.replace(".jsonl", "")
             with open(os.path.join(folder, filename), "r", encoding="utf-8") as f:
                 for line in f:

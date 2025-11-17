@@ -24,6 +24,7 @@ from agents.navigation.basic_agent import BasicAgent
 import manual_control as mc
 import argparse
 
+
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument("-s", "--speed", "--speed-kmh",
                     dest="speed_kmh", type=float, default=10.0,
@@ -139,7 +140,6 @@ def mqtt_processor():
             payload_raw = mqtt_queue.get()
             payload = json.loads(payload_raw.decode())
 
-            action = payload.get("action", "").lower()
             reception_time = payload.get("send", "")
             automaton_time = payload.get("aut", "")
             return_time = time.time() - float(payload.get("ret", ""))
@@ -148,6 +148,7 @@ def mqtt_processor():
             t["times"]["automaton_time"].append(float(automaton_time))
             t["times"]["return_time"].append(float(return_time))
 
+            action = payload.get("action", "").lower()
             lvl = payload.get("level", None)
 
             if lvl is not None:
@@ -190,14 +191,14 @@ weather = carla.WeatherParameters(
     cloudiness=0.0
 )
 
-weather = carla.WeatherParameters(
-    cloudiness=0.0,         # very cloudy sky
-    precipitation=0.0,       # rain
-    precipitation_deposits=0.0, # puddles
-    wind_intensity=0.0,      # wind
-    sun_altitude_angle=90.0, # below horizon = night
-    fog_density=0.0,         # fog density (0–100)
-)
+# weather = carla.WeatherParameters(
+#     cloudiness=0.0,         # very cloudy sky
+#     precipitation=0.0,       # rain
+#     precipitation_deposits=0.0, # puddles
+#     wind_intensity=0.0,      # wind
+#     sun_altitude_angle=90.0, # below horizon = night
+#     fog_density=0.0,         # fog density (0–100)
+# )
 # weather = carla.WeatherParameters(
 #     cloudiness=90.0,         # very cloudy sky
 #     precipitation=0.0,       # rain
@@ -206,15 +207,15 @@ weather = carla.WeatherParameters(
 #     sun_altitude_angle=-20.0, # below horizon = night
 #     fog_density=0.0,         # fog density (0–100)
 # )
-# weather = carla.WeatherParameters(
-#     cloudiness=90.0,         # very cloudy sky
-#     precipitation=0.0,      # heavy rain
-#     precipitation_deposits=0.0, # puddles
-#     wind_intensity=0.0,     # medium-strong wind
-#     sun_altitude_angle=0.5, # below horizon = night
-#     fog_density=100.0,        # fog density (0–100)
-#     fog_distance=50.0,       # max visibility in meters
-# )
+weather = carla.WeatherParameters(
+    cloudiness=90.0,         # very cloudy sky
+    precipitation=0.0,      # heavy rain
+    precipitation_deposits=0.0, # puddles
+    wind_intensity=0.0,     # medium-strong wind
+    sun_altitude_angle=0.5, # below horizon = night
+    fog_density=100.0,        # fog density (0–100)
+    fog_distance=50.0,       # max visibility in meters
+)
 
 world.set_weather(weather)
 
@@ -522,6 +523,7 @@ def process_image():
                 "stopping_distance": stopping_distance if stopping_distance else None,
                 "speed_before_brake": speed_before_brake if speed_before_brake else None
             })
+            print(velocity, distace)
             stopping_distance = None
             speed_before_brake = 0.0
             enter = False
@@ -927,7 +929,37 @@ walker = world.try_spawn_actor(walker_bp, walker_transform)
 if walker:
     world.tick()
     time.sleep(0.2)
-    real_start = walker.get_location()
+    obstacle_bp = bp_lib.find('vehicle.carlamotors.carlacola')
+
+    lane_offset = 5     
+    spacing = 3.0        
+    num_obstacles = 0
+
+    car_x = start.x
+    car_y = 10
+
+    car_yaw = -90  
+                
+
+    obstacles = []
+
+    for i in range(num_obstacles):
+        loc = carla.Location(
+            x=car_x + lane_offset,     
+            y=car_y + i * spacing,      
+            z=1.0
+        )
+        rot = carla.Rotation(yaw=car_yaw)
+
+        obst = world.try_spawn_actor(obstacle_bp, carla.Transform(loc, rot))
+        if obst:
+            obst.set_autopilot(False)
+            obstacles.append(obst)
+
+    print(f"[OBSTACLES] Spawned {len(obstacles)} parked cars along vehicle lane")
+
+
+
     def pedestrian_control(x=1, y=0, z=0):
         ctrl = carla.WalkerControl()
         ctrl.speed = WALKER_SPEED
