@@ -7,13 +7,13 @@ import matplotlib.pyplot as plt
 
 
 INPUT_DIR = "./logs"
-OUTPUT_DIR = "./results2"
+OUTPUT_DIR = "./results4"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def load_all_logs(folder):
     records = []
     for filename in os.listdir(folder):
-        if filename.endswith("2.jsonl"):
+        if filename.endswith("4.jsonl"):
             scenario_name = filename.replace(".jsonl", "")
             with open(os.path.join(folder, filename), "r", encoding="utf-8") as f:
                 for line in f:
@@ -26,6 +26,10 @@ def load_all_logs(folder):
     return pd.DataFrame(records)
 
 df = load_all_logs(INPUT_DIR)
+
+df["cross_side"] = df["code"].apply(
+    lambda x: "FarSide" if "FarSide" in str(x) else ("NearSide" if "NearSide" in str(x) else None)
+)
 
 all_rt = {"mild_brake": [], "brake": [], "emergency_brake": []}
 
@@ -96,7 +100,9 @@ def extract_metrics(row):
         "stop_distance_mean": stop_distance,
         "d_min": d_min_value,
         "emergency_brake_count": emergency_brake_count,
-        "total_stops": total_stops
+        "total_stops": total_stops,
+        "cross_side": "FarSide" if "FarSide" in str(row.get("code")) else ("NearSide" if "NearSide" in str(row.get("code")) else None),
+
     })
 
 
@@ -104,6 +110,7 @@ def compute_scenario_score(row):
     import numpy as np
     import pandas as pd
 
+    scen_name = row.get("scenario_name", "").lower()
     v_test = row.get("speed_kmh", 0.0)
     v_impact = row.get("residual_speed_kmh", v_test)
     collided = (row.get("with_pedestrian", 0) > 0) or (row.get("collision_count", 0) > 0)
@@ -112,19 +119,46 @@ def compute_scenario_score(row):
         v_impact = v_test
 
     v_impact = max(0.0, v_impact)
-    delta_v = max(0.0, v_test - v_impact) 
+
+    # ===========================================================
+    # CASE 1 — CPTA SCENARIO (10–20 km/h)
+    # ===========================================================
+    if "cpta" in scen_name:
+        # AVOIDANCE ALWAYS FULL SCORE
+        if not collided:
+            return 100.0
+
+        # --- collisione a 10 km/h ---
+        if v_test <= 10:
+            score = max(0.0, 1.0 - (v_impact / 10.0)) * 60.0
+            return round(score, 2)
+
+        # --- collisione a 20 km/h ---
+        if v_test <= 20:
+            if v_impact <= 5:
+                score = 100.0 - (v_impact * 6.0)   # da 0 a 5 km/h
+            else:
+                score = max(0.0, 70.0 - (v_impact - 5) * 10)
+
+            return round(score, 2)
+        return 0.0
+
+    # ===========================================================
+    # CASE 2 — NORMAL CROSSING SCENARIOS (CPFA / CPNA / CPNCO)
+    # ===========================================================
+    delta_v = max(0.0, v_test - v_impact)
 
     if v_test < 40:
         return 100.0 if not collided else 0.0
-
-
     x = np.array([0, 5, 10, 15, 20])
     y = np.array([0, 0.25, 0.5, 0.75, 1.0])
     score_norm = np.interp(delta_v, x, y)
 
     if not collided:
         return 100.0
+
     return round(score_norm * 100.0, 2)
+
 
 
 metrics_df = df.apply(extract_metrics, axis=1)
@@ -170,34 +204,28 @@ print(f"[OK] Aggregated metrics saved to {output_csv} (with renamed columns)")
 
 sns.set(style="whitegrid")
 
-def safe_plot(plot_func, data, x, y, **kwargs):
-    """Esegue un plot solo se esistono dati validi."""
-    if y not in data.columns:
-        return
-    sub = data.dropna(subset=[y])
-    if sub.empty:
-        return
-    plt.figure(figsize=(10, 6))
-    plot_func(data=sub, x=x, y=y, **kwargs)
-    plt.tight_layout()
+# Palette uniforme
+PALETTE_DAY_NIGHT = {"Day": "#99d3fd", "Night": "#ff7f0e"}
 
 for scen, group in agg_metrics.groupby("scenario_name"):
-    # === Boxplot della d_min ===
     sub = metrics_df[metrics_df["scenario_name"] == scen]
 
+    # === d_min ===
     if not sub.empty and "d_min" in sub.columns:
         plt.figure(figsize=(10, 6))
         sns.boxplot(
             data=sub,
             x="speed_kmh",
             y="d_min",
-            hue="day_night",
-            palette="coolwarm",
-            showfliers = False,
-            linewidth=1.2,    # spessore linee box
+            hue="cross_side",
+            hue_order=["FarSide", "NearSide"],
+            palette={"FarSide": "#49a7eb", "NearSide": "#efad73"},
+            showfliers=False,
+            linewidth=1.2,
             width=0.6
         )
-        plt.title(f"Distribution of d_min – {scen}", fontsize=14, weight="bold")
+        plt.legend(title="Crossing side", fontsize=11, title_fontsize=12)
+
         plt.ylabel("Minimum distance from pedestrian [m]", fontsize=12)
         plt.xlabel("Vehicle speed [km/h]", fontsize=12)
         plt.grid(True, linestyle="--", alpha=0.5)
@@ -205,50 +233,52 @@ for scen, group in agg_metrics.groupby("scenario_name"):
         plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_dmin_boxplot.png"), dpi=200)
         plt.close()
 
-
-    # === BOX 1: Automaton reaction time (reaction_times_ttc_based) ===
-    sub_ttc = metrics_df[metrics_df["scenario_name"] == scen]
-    if not sub_ttc.empty and "reaction_time_ttc_mean" in sub_ttc.columns:
+    # === Reaction time (TTC) ===
+    if not sub.empty and "reaction_time_ttc_mean" in sub.columns:
         plt.figure(figsize=(10, 6))
         sns.boxplot(
-            data=sub_ttc,
+            data=sub,
             x="speed_kmh",
             y="reaction_time_ttc_mean",
-            hue="day_night",
-            palette="crest",
+            hue="cross_side",
+            hue_order=["FarSide", "NearSide"],
+            palette={"FarSide": "#49a7eb", "NearSide": "#efad73"},
             showfliers=False,
             linewidth=1.2,
             width=0.6
         )
-        plt.title(f"Automaton Reaction Time – {scen}", fontsize=14, weight="bold")
-        plt.ylabel("Automaton reaction time [s]", fontsize=12)
+
+        plt.legend(title="Crossing side", fontsize=11, title_fontsize=12)
+
+        plt.ylabel("Reaction time [s]", fontsize=12)
         plt.xlabel("Vehicle speed [km/h]", fontsize=12)
         plt.grid(True, linestyle="--", alpha=0.5)
         plt.tight_layout()
-        plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_reaction_time_ttc_based.png"), dpi=200)
+        plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_reaction_time_ttc.png"), dpi=200)
         plt.close()
 
-
-    # === BOX 2: Simulation reaction time (reaction_times_simulation) ===
-    sub_sim = metrics_df[metrics_df["scenario_name"] == scen]
-    if not sub_sim.empty and "reaction_time_sim_mean" in sub_sim.columns:
+    # === Reaction time (simulation) ===
+    if not sub.empty and "reaction_time_sim_mean" in sub.columns:
         plt.figure(figsize=(10, 6))
         sns.boxplot(
-            data=sub_sim,
+            data=sub,
             x="speed_kmh",
             y="reaction_time_sim_mean",
-            hue="day_night",
-            palette="mako",
+            hue="cross_side",
+            hue_order=["FarSide", "NearSide"],
+            palette={"FarSide": "#49a7eb", "NearSide": "#efad73"},
             showfliers=False,
             linewidth=1.2,
             width=0.6
         )
-        plt.title(f"Simulation Reaction Time – {scen}", fontsize=14, weight="bold")
-        plt.ylabel("Simulation reaction time [s]", fontsize=12)
+
+        plt.ylabel("Reaction time [s]", fontsize=12)
+        plt.legend(title="Crossing side", fontsize=11, title_fontsize=12)
+
         plt.xlabel("Vehicle speed [km/h]", fontsize=12)
         plt.grid(True, linestyle="--", alpha=0.5)
         plt.tight_layout()
-        plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_reaction_time_simulation.png"), dpi=200)
+        plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_reaction_time_sim.png"), dpi=200)
         plt.close()
 
 
