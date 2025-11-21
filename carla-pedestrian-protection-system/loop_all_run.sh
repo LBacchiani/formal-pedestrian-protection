@@ -1,8 +1,8 @@
 #!/bin/bash
 
-SCRIPTS=("test2.py")
+SCRIPTS=("test4_s.py")
 
-ITER=100
+ITER=50
 
 echo "Avvio loop multiplo (PID principale: $$)"
 echo "   → Puoi interrompere tutto in qualsiasi momento con: kill -INT $$"
