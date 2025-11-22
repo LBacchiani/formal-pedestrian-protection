@@ -15,9 +15,9 @@ RT_WINDOW_FRAMES = RT_H / 100
 RT_HALF_FRAMES = max(1, math.floor(RT_WINDOW_FRAMES / 2))  # Half reaction window (minimum 1)
 
 # Consensus thresholds (percentage of buffer that must agree)
-S_DISTANCE_CONSENSUS = 0.6
-SR_DISTANCE_CONSENSUS = 0.4
-RC_DISTANCE_CONSENSUS = 0.3
+S_DISTANCE_CONSENSUS = 0.8
+SR_DISTANCE_CONSENSUS = 0.6
+RC_DISTANCE_CONSENSUS = 0.4
 C_DISTANCE_CONSENSUS = 0.2
 CONSENSUS = 0.8
 
