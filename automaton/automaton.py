@@ -12,7 +12,7 @@ N = 10  # Buffer size
 RT_H = 700  # Reaction time (ms)
 CAMERA_FREQ = 100  # Camera frequency (ms)
 RT_WINDOW_FRAMES = RT_H / 100
-RT_HALF_FRAMES = max(1, math.floor(RT_WINDOW_FRAMES / 2))  # Half reaction window (minimum 1)
+RT_HALF_FRAMES = max(1, math.ceil(RT_WINDOW_FRAMES / 2))  # Half reaction window (minimum 1)
 
 # Consensus thresholds (percentage of buffer that must agree)
 S_DISTANCE_CONSENSUS = 0.8

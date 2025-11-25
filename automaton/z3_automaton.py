@@ -40,7 +40,7 @@ def declare_continuous_vars(suffix=""):
 def initial_state(q, B_C, B_TTC, B_cs, s_d, s_c, t):
     """
     Init = {(Normal, X_0)} where X_0 = {C_i = 0, TTC_i = NO_TTC, cs_i = 0, 
-                                         s_d = 0, s_c = 0, s_u = 0, t = 0}
+                                         s_d = 0, s_c = 0, s_u = 0}
     """
     constraints = [q == Normal]
     
@@ -50,9 +50,8 @@ def initial_state(q, B_C, B_TTC, B_cs, s_d, s_c, t):
         constraints.append(B_cs[i] == 0)
     
     constraints.extend([
-        s_d == 0,
-        s_c == 0,
-        t == 0
+        s_d == 300,
+        s_c == 300
     ])
     
     return And(constraints)
@@ -246,7 +245,7 @@ def G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t):
 
 def G_from_emergency(B_C, B_TTC, B_cs, s_d, s_c, t):
     """Guard for transitions from EmergencyBraking"""
-    return Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t))
+    return And(Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t)),t < CAMERA_FREQ)
 
 
 # ============================================================================
@@ -306,7 +305,6 @@ def reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t,
         constraints.append(B_TTC_next[i] == B_TTC[i])
         constraints.append(B_cs_next[i] == B_cs[i])
     
-    # Time remains unchanged
     constraints.append(t_next == t + CAMERA_FREQ)
     
     # Reset staleness timers conditionally
