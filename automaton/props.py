@@ -216,13 +216,13 @@ def prop_sudden_pedestrian_reaction():
     s.add(initial_state(q, B_C, B_TTC, B_cs, s_d, s_c, t))
     s.add(initial_state(q_start, B_C, B_TTC, B_cs, s_d, s_c, t))
     max_steps = RT_HALF_FRAMES # The maximum allowed steps
-    #t_cont = Int(f't_cont{0}')
-    #s.add(t_cont >= CAMERA_FREQ)
-    s.add(t >= CAMERA_FREQ)
+    t_cont = Int(f't_cont{0}')
+    s.add(t_cont >= CAMERA_FREQ)
+    #s.add(t >= CAMERA_FREQ)
 
     
 
-    for step in range(2*max_steps):
+    for step in range(max_steps):
         B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next = declare_continuous_vars(f"_next{step}")
         #B_C_reset, B_TTC_reset, B_cs_reset, , s_c_reset, t_reset = declare_continuous_vars(f"_reset{step}")
         C_new_critical = Real('C_new_critical') 
@@ -232,15 +232,23 @@ def prop_sudden_pedestrian_reaction():
         cs_new_crossing = Int('cs_new_crossing')
         s.add(cs_new_crossing == 1)
         q_next = Const(f'q_next{step}', State)
+        t_cont_next = Int(f't_cont{step+1}')
 
-        s.add(If(t >= CAMERA_FREQ, sense(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, C_new_critical, TTC_new_critical, cs_new_crossing), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)))
+        s.add(sense(B_C, B_TTC, B_cs, s_d, s_c, t_cont, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_cont_next, C_new_critical, TTC_new_critical, cs_new_crossing))
+        s.add(Or(And(invariant(q, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_cont_next)), 
+        And(reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t_cont, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_cont_next), q == q_next, transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_cont))))
+
+
+
+
+        #s.add(If(t >= CAMERA_FREQ, sense(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, C_new_critical, TTC_new_critical, cs_new_crossing), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)))
 
         # 1. Sense Jump (X -> X_next): Applies critical input
         # s.add(sense(B_C, B_TTC, B_cs, s_d, s_c, t_cont, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, C_new_critical, TTC_new_critical, cs_new_crossing))
         # s.add(det_coll(B_C_next, B_TTC_next, B_cs_next))
 
         # 2. Transition (q -> q_next) - GUARD CHECK ON X_NEXT
-        s.add(Or(invariant(q, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next), And(q == q_next, transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next))))
+        #s.add(Or(invariant(q, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next), And(q == q_next, transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next))))
 
         B_C, B_TTC, B_cs, s_d, s_c, t = B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next
  
@@ -278,7 +286,7 @@ def prop_sudden_pedestrian_reaction():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-   #prop_guards_mutually_exclusive()
-   #prop_invariant_vs_transitions_exclusive()
-   #prop_guards_complete()
+   prop_guards_mutually_exclusive()
+   prop_invariant_vs_transitions_exclusive()
+   prop_guards_complete()
    prop_sudden_pedestrian_reaction()
