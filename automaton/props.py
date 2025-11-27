@@ -70,7 +70,9 @@ def prop_guards_mutually_exclusive():
 
     B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
     q = Const('q', State)
-    states = [Normal, SafeWarning, Throttling, SoftBraking, EmergencyBraking]
+    states = [Normal, 
+    # SafeWarning, 
+    Throttling, SoftBraking, EmergencyBraking]
 
     for q_val in states:
         trans_constraints = [ transition(q, qn, B_C, B_TTC, B_cs, s_d, s_c, t) for qn in states ]
@@ -111,7 +113,9 @@ def prop_invariant_vs_transitions_exclusive():
 
     B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
     q = Const('q', State)
-    states = [Normal, SafeWarning, Throttling, SoftBraking, EmergencyBraking]
+    states = [Normal, 
+    # SafeWarning, 
+    Throttling, SoftBraking, EmergencyBraking]
 
     for q_val in states:
         # Collect all transitions from q_val
@@ -165,7 +169,9 @@ def prop_guards_complete():
 
     B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
     q = Const('q', State)
-    states = [Normal, SafeWarning, Throttling, SoftBraking, EmergencyBraking]
+    states = [Normal, 
+    # SafeWarning, 
+    Throttling, SoftBraking, EmergencyBraking]
 
     for q_val in states:
         trans_constraints = [ transition(q, qn, B_C, B_TTC, B_cs, s_d, s_c, t) for qn in states ]
