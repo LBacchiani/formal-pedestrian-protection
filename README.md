@@ -9,7 +9,7 @@ These two parts work together to evaluate pedestrian-related Euro NCAP AEB scena
 
 ---
 
-## 🌐 1. Digital Twin & Hybrid Automaton (`automaton/`)
+## 1. Digital Twin & Hybrid Automaton (`automaton/`)
 
 This module contains:
 
@@ -20,7 +20,7 @@ This module contains:
   - Publishes braking commands back to the simulation
   - Logs events & formal guarantees (reaction times, transitions, stop conditions)
 
-### ▶️ Running the Digital Twin via Docker
+### Running the Digital Twin via Docker
 
 From inside the `automaton/` folder:
 
@@ -56,9 +56,9 @@ conda create -n carla-aeb python=3.8
 conda activate carla-aeb
 pip install -r requirements.txt
 
+```
 ---
-
-## 🧪 Test Scenarios
+## Test Scenarios
 
 The repository includes multiple scenario scripts (`test1.py`, `test2.py`, etc.), each corresponding to a Euro NCAP pedestrian test case:
 
