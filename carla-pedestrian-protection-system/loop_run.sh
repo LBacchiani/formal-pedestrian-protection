@@ -10,7 +10,6 @@ echo
 
 for SPEED in "${SPEEDS[@]}"; do
 
-    # Imposta WAIT_TIME in base alla velocità
     if [[ $SPEED -eq 50 ]]; then
         WAIT_TIME=16
     elif [[ $SPEED -eq 40 ]]; then

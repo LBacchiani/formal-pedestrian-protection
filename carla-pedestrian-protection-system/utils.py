@@ -7,24 +7,17 @@ def smooth_increase(level_brk, level_intensity, rate, speed):
     speed_factor = min(speed / max_speed, 1.0)
 
     if speed < 10:
-        # a basse velocità decresce lentamente
         delta = -100
     else:
         delta = rate * (level_intensity ** 1.2) * (speed_factor * 1.05)
 
-    level_brk = max(0.0, level_brk + delta)  # evita valori negativi
+    level_brk = max(0.0, level_brk + delta)  
     max_brk = 0.40 + 0.30 * speed_factor
 
-    # print(f"Speed: {speed:.2f}, Δ: {delta:.4f}, Level: {level_brk:.4f}, Max: {max_brk:.4f}")
     return min(level_brk, max_brk)
 
 
 def max_yaw_allowed(distance):
-    """
-    Returns the maximum angle (in degrees) considered as crossing.
-    - 0 m  → +-37°
-    - 30 m → +-0° (beyond this, no crossing)
-    """
     if distance <= 0:
         return 37.0
     elif distance >= 40.0:

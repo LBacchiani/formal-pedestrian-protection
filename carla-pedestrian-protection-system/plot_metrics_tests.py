@@ -40,7 +40,6 @@ for _, row in df.iterrows():
 
 global_means = {k: (np.mean(v) if v else None) for k, v in all_rt.items()}
 
-# Converti in DataFrame per salvare insieme al resto
 global_df = pd.DataFrame([global_means])
 global_df["type"] = "Global Mean (reaction_times_ttc_based)"
 print("[INFO] Global reaction time means:", global_means)
@@ -75,7 +74,6 @@ def extract_metrics(row):
         except Exception:
             pass
 
-    # ---- FORCE d_min = 0 ON COLLISION ----
     collisions = row.get("collisions", {}) or {}
     if collisions.get("with_pedestrian", 0) > 0:
         d_min_value = 0.0
@@ -120,32 +118,23 @@ def compute_scenario_score(row):
 
     v_impact = max(0.0, v_impact)
 
-    # ===========================================================
-    # CASE 1 — CPTA SCENARIO (10–20 km/h)
-    # ===========================================================
     if "cpta" in scen_name:
-        # AVOIDANCE ALWAYS FULL SCORE
         if not collided:
             return 100.0
 
-        # --- collisione a 10 km/h ---
         if v_test <= 10:
             score = max(0.0, 1.0 - (v_impact / 10.0)) * 60.0
             return round(score, 2)
 
-        # --- collisione a 20 km/h ---
         if v_test <= 20:
             if v_impact <= 5:
-                score = 100.0 - (v_impact * 6.0)   # da 0 a 5 km/h
+                score = 100.0 - (v_impact * 6.0)   
             else:
                 score = max(0.0, 70.0 - (v_impact - 5) * 10)
 
             return round(score, 2)
         return 0.0
 
-    # ===========================================================
-    # CASE 2 — NORMAL CROSSING SCENARIOS (CPFA / CPNA / CPNCO)
-    # ===========================================================
     delta_v = max(0.0, v_test - v_impact)
 
     if v_test < 40:
@@ -167,15 +156,13 @@ metrics_df = metrics_df[(metrics_df["d_min"].isna()) | (metrics_df["d_min"] < 15
 metrics_df["day_night"] = metrics_df["is_day"].map({True: "Day", False: "Night"})
 metrics_df["points_ncap"] = metrics_df.apply(compute_scenario_score, axis=1)
 
-# ============================
-# 1) FUNZIONE CI + FORMATO LATEX
-# ============================
+
 def compute_residual_speed_latex(series):
     series = pd.to_numeric(series.dropna(), errors="coerce")
     n = len(series)
 
     if n == 0:
-        return None  # no collision → nothing to compute
+        return None 
 
     if n == 1:
         m = series.iloc[0]
@@ -188,10 +175,6 @@ def compute_residual_speed_latex(series):
     return f"{mean:.2f} ± {ci:.2f}"
 
 
-
-# ============================
-# 2) AGGREGAZIONE BASE
-# ============================
 agg_metrics = (
     metrics_df.groupby(["scenario_name", "code", "speed_kmh", "day_night"])
     .agg({
@@ -208,16 +191,13 @@ agg_metrics = (
     .reset_index()
 )
 
-# ============================
-# 3) AGGIUNTA COLONNA LATEX
-# ============================
+
 residual_group = (
     metrics_df.groupby(["scenario_name", "code", "speed_kmh", "day_night"])["residual_speed_kmh"]
     .apply(compute_residual_speed_latex)
     .reset_index(name="residual_speed_latex")
 )
 
-# MERGE PULITO
 agg_metrics = agg_metrics.merge(
     residual_group,
     on=["scenario_name", "code", "speed_kmh", "day_night"],
@@ -245,13 +225,11 @@ print(f"[OK] Aggregated metrics saved to {output_csv} (with renamed columns)")
 
 sns.set(style="whitegrid")
 
-# Palette uniforme
 PALETTE_DAY_NIGHT = {"Day": "#99d3fd", "Night": "#ff7f0e"}
 
 for scen, group in agg_metrics.groupby("scenario_name"):
     sub = metrics_df[metrics_df["scenario_name"] == scen]
 
-    # === d_min ===
     if not sub.empty and "d_min" in sub.columns:
         plt.figure(figsize=(10, 6))
         sns.boxplot(
@@ -274,7 +252,6 @@ for scen, group in agg_metrics.groupby("scenario_name"):
         plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_dmin_boxplot.png"), dpi=200)
         plt.close()
 
-    # === Reaction time (TTC) ===
     if not sub.empty and "reaction_time_ttc_mean" in sub.columns:
         plt.figure(figsize=(10, 6))
         sns.boxplot(
@@ -298,7 +275,6 @@ for scen, group in agg_metrics.groupby("scenario_name"):
         plt.savefig(os.path.join(OUTPUT_DIR, f"{scen}_reaction_time_ttc.png"), dpi=200)
         plt.close()
 
-    # === Reaction time (simulation) ===
     if not sub.empty and "reaction_time_sim_mean" in sub.columns:
         plt.figure(figsize=(10, 6))
         sns.boxplot(

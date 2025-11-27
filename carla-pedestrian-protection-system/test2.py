@@ -179,8 +179,6 @@ mqtt_client.subscribe(TOPIC_REC)
 processor_thread = threading.Thread(target=mqtt_processor, daemon=True)
 processor_thread.start()
 model = YOLO("yolov8n.pt")
-# cv2.namedWindow('RGB image', cv2.WINDOW_NORMAL)
-# cv2.namedWindow('Depth image', cv2.WINDOW_NORMAL)
 
 client = carla.Client('localhost', 2000)
 client.set_timeout(10.0)
@@ -897,7 +895,7 @@ rgb_camera, depth_camera = setup_camera(vehicle)
 
 actor_agent = BasicAgent(vehicle)
 actor_agent.set_destination(destination)
-actor_agent.set_target_speed(VEHICLE_SPEED)  # km/h
+actor_agent.set_target_speed(VEHICLE_SPEED)  
 actor_agent.ignore_vehicles(True)
 actor_agent.ignore_stop_signs(True)
 

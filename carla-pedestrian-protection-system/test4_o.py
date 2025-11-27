@@ -31,7 +31,7 @@ parser.add_argument("-s", "--speed", "--speed-kmh",
 args, unknown = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + unknown
 
-VEHICLE_SPEED = float(args.speed_kmh)  # km/h
+VEHICLE_SPEED = float(args.speed_kmh)  
 
 @dataclass
 class Pedestrian:
@@ -178,8 +178,6 @@ mqtt_client.subscribe(TOPIC_REC)
 processor_thread = threading.Thread(target=mqtt_processor, daemon=True)
 processor_thread.start()
 model = YOLO("yolov8n.pt")
-# cv2.namedWindow('RGB image', cv2.WINDOW_NORMAL)
-# cv2.namedWindow('Depth image', cv2.WINDOW_NORMAL)
 
 client = carla.Client('localhost', 2000)
 client.set_timeout(10.0)
@@ -243,7 +241,6 @@ metrics = {
     },
     "scenario_name" : SCENARIO_NAME,
 
-    # === Metriche chiave ===
     "residual_speed_kmh": None,
     "impact_force_N": None,
 
@@ -803,7 +800,6 @@ def collision_callback(event):
 
     metrics["collisions"]["count"] += 1
 
-    # Se colpisce un pedone → registra residuo e forza
     if actor_type.startswith("walker.pedestrian"):
         metrics["collisions"]["with_pedestrian"] = 1
         if metrics["residual_speed_kmh"] is None:
@@ -880,9 +876,8 @@ for tl in world.get_actors().filter('traffic.traffic_light'):
 
 
 start = carla.Location(x=-41.5, y=110.0, z=1.0)
-# Curva dolce verso destra
 waypoints_curve = [
-    carla.Location(x=-41.5, y=76.00, z=1.0),  # inizio curva
+    carla.Location(x=-41.5, y=76.00, z=1.0),  
     carla.Location(x=-41.0, y=75.80, z=1.0),
     carla.Location(x=-40.0, y=75.30, z=1.0),
     carla.Location(x=-39.0, y=74.80, z=1.0),
@@ -914,7 +909,7 @@ waypoints_curve = [
     carla.Location(x=-13.0, y=70.05, z=1.0),
     carla.Location(x=-12.0, y=69.98, z=1.0),
     carla.Location(x=-11.0, y=69.94, z=1.0),
-    carla.Location(x=-10.0, y=69.90, z=1.0)   # uscita curva
+    carla.Location(x=-10.0, y=69.90, z=1.0)   
 ]
 
 route = waypoints_curve
@@ -928,19 +923,16 @@ game_loop = setup(vehicle)
 rgb_camera, depth_camera = setup_camera(vehicle)
 
 actor_agent = BasicAgent(vehicle)
-actor_agent.set_target_speed(VEHICLE_SPEED)  # km/h
+actor_agent.set_target_speed(VEHICLE_SPEED)  
 actor_agent.ignore_vehicles(True)
 actor_agent.ignore_stop_signs(True)
 
 from agents.navigation.local_planner import RoadOption
 
-# Ottieni il map object
 carla_map = world.get_map()
 
-# Converte le location in waypoint reali
 waypoints_route = [carla_map.get_waypoint(loc) for loc in route]
 
-# Crea la lista di tuple (waypoint, None) – o (waypoint, RoadOption.LANE_FOLLOW) se disponibile
 actor_agent.set_global_plan([(wp, RoadOption.LANE_FOLLOW if hasattr(RoadOption, 'LANE_FOLLOW') else None)
                              for wp in waypoints_route])
 

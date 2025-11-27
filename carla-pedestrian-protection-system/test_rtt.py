@@ -45,12 +45,10 @@ def main():
             safe_extend(automaton_all, times.get("automaton_time", []))
             safe_extend(return_all, times.get("return_time", []))
 
-    # Calcolo statistiche
     s_rec = stats("reception_time", reception_all)
     s_aut = stats("automaton_time", automaton_all)
     s_ret = stats("return_time", return_all)
 
-    # Media totali
     mean_rec = s_rec["mean"]
     mean_aut = s_aut["mean"]
     mean_ret = s_ret["mean"]

@@ -7,17 +7,17 @@ dev = InputDevice(REAL_DEVICE)
 print(f"🔧 Collegato al device reale: {dev.name}")
 
 AXES_MAP = {
-    0: uinput.ABS_X,   # sterzo
-    3: uinput.ABS_Y,   # acceleratore
-    4: uinput.ABS_Z,   # freno
-    1: uinput.ABS_RZ,  # frizione
+    0: uinput.ABS_X,   
+    3: uinput.ABS_Y,   
+    4: uinput.ABS_Z,   
+    1: uinput.ABS_RZ, 
 }
 
 BUTTON_MAP = {
-    288: uinput.BTN_TRIGGER,  # paddle sinistra
-    289: uinput.BTN_THUMB,    # paddle destra
-    290: uinput.BTN_TOP,      # bottone A
-    291: uinput.BTN_PINKIE,   # bottone B
+    288: uinput.BTN_TRIGGER,  
+    289: uinput.BTN_THUMB,    
+    290: uinput.BTN_TOP,     
+    291: uinput.BTN_PINKIE,   
 }
 
 ABS_RANGE = (0, 65535, 0, 0)
