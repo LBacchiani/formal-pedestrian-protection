@@ -5,9 +5,13 @@ import math
 # ============================================================================
 # DISCRETE STATES (Q)
 # ============================================================================
-State, (Normal, SafeWarning, Throttling, SoftBraking, EmergencyBraking) = EnumSort(
+State, (Normal, 
+# SafeWarning, 
+Throttling, SoftBraking, EmergencyBraking) = EnumSort(
     'State', 
-    ['Normal', 'SafeWarning', 'Throttling', 'SoftBraking', 'EmergencyBraking']
+    ['Normal', 
+    # 'SafeWarning', 
+    'Throttling', 'SoftBraking', 'EmergencyBraking']
 )
 
 # ============================================================================
@@ -40,7 +44,7 @@ def declare_continuous_vars(suffix=""):
 def initial_state(q, B_C, B_TTC, B_cs, s_d, s_c, t):
     """
     Init = {(Normal, X_0)} where X_0 = {C_i = 0, TTC_i = NO_TTC, cs_i = 0, 
-                                         s_d = 0, s_c = 0, s_u = 0, t = 0}
+                                         s_d = 0, s_c = 0, s_u = 0}
     """
     constraints = [q == Normal]
     
@@ -50,9 +54,8 @@ def initial_state(q, B_C, B_TTC, B_cs, s_d, s_c, t):
         constraints.append(B_cs[i] == 0)
     
     constraints.extend([
-        s_d == 0,
-        s_c == 0,
-        t == 0
+        s_d == 300,
+        s_c == 300
     ])
     
     return And(constraints)
@@ -155,16 +158,19 @@ def invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t):
     Inv_normal = And(
         Or(
             Not(valid_d(B_C, B_TTC, B_cs, s_d, s_c, t)),
-            And(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t), Or(s_dist(B_C, B_TTC, B_cs, s_d, s_c, t), uncertain(B_C, B_TTC, B_cs, s_d, s_c, t)))
+            # And(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t), Or(s_dist(B_C, B_TTC, B_cs, s_d, s_c, t), uncertain(B_C, B_TTC, B_cs, s_d, s_c, t))),
+            Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t)),
+            s_dist(B_C, B_TTC, B_cs, s_d, s_c, t),
+            uncertain(B_C, B_TTC, B_cs, s_d, s_c, t)
         ),
         t < CAMERA_FREQ
     )
 
-    Inv_safe_warning = And(
-        valid_d(B_C, B_TTC, B_cs, s_d, s_c, t),
-        Or(Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t)),uncertain(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        t < CAMERA_FREQ
-    )
+    # Inv_safe_warning = And(
+    #     valid_d(B_C, B_TTC, B_cs, s_d, s_c, t),
+    #     Or(Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t)),uncertain(B_C, B_TTC, B_cs, s_d, s_c, t)),
+    #     t < CAMERA_FREQ
+    # )
 
     Inv_throttling = And(
         valid_c(B_C, B_TTC, B_cs, s_d, s_c, t),
@@ -185,10 +191,10 @@ def invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t):
 
     return If(
         q == Normal, Inv_normal,
-        If(q == SafeWarning, Inv_safe_warning,
+        # If(q == SafeWarning, Inv_safe_warning,
         If(q == Throttling, Inv_throttling,
         If(q == SoftBraking, Inv_soft_braking,
-        If(q == EmergencyBraking, Inv_emergency, False))))
+        If(q == EmergencyBraking, Inv_emergency, False)))#)
     )
 
 
@@ -206,18 +212,20 @@ def G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t):
     return And(
         Or(
             Not(valid_d(B_C, B_TTC, B_cs, s_d, s_c, t)),
-            And(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t), s_dist(B_C, B_TTC, B_cs, s_d, s_c, t))
+            Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t)),
+            s_dist(B_C, B_TTC, B_cs, s_d, s_c, t)
         ),
         t < CAMERA_FREQ
     )
 
-def G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, t):
-    """Guard for transitions to SafeWarning"""
-    return And(
-        valid_d(B_C, B_TTC, B_cs, s_d, s_c, t),
-        Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        t < CAMERA_FREQ
-    )
+
+# def G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, t):
+#     """Guard for transitions to SafeWarning"""
+#     return And(
+#         valid_d(B_C, B_TTC, B_cs, s_d, s_c, t),
+#         Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t)),
+#         t < CAMERA_FREQ
+#     )
 
 def G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, t):
     return And(
@@ -246,7 +254,7 @@ def G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t):
 
 def G_from_emergency(B_C, B_TTC, B_cs, s_d, s_c, t):
     """Guard for transitions from EmergencyBraking"""
-    return Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t))
+    return And(Not(valid_c(B_C, B_TTC, B_cs, s_d, s_c, t)),t < CAMERA_FREQ)
 
 
 # ============================================================================
@@ -306,7 +314,6 @@ def reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t,
         constraints.append(B_TTC_next[i] == B_TTC[i])
         constraints.append(B_cs_next[i] == B_cs[i])
     
-    # Time remains unchanged
     constraints.append(t_next == t + CAMERA_FREQ)
     
     # Reset staleness timers conditionally
@@ -321,21 +328,6 @@ def reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t,
            s_c_next == s_c + CAMERA_FREQ)
     )    
     return And(constraints)
-
-# def reset_h(B_C, B_TTC, B_cs, s_d, s_c, t,
-#             B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
-#             C_new, TTC_new, cs_new):
-#     """
-#     h(X) = sense(X) if t >= CAM_FREQ, else reset(X)
-#     """
-#     return If(
-#         t >= CAMERA_FREQ,
-#         sense(B_C, B_TTC, B_cs, s_d, s_c, t,
-#               B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
-#               C_new, TTC_new, cs_new),
-#         reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t,
-#                      B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next)
-#     )
 
 # ============================================================================
 # TRANSITION RELATION
@@ -354,28 +346,28 @@ def transition(q, q_next, B_C, B_TTC, B_cs, s_d, s_c, t):
     transition_cases = Or(
         # From Normal (e1-e5)
         And(q == Normal, q_next == Normal, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == Normal, q_next == SafeWarning, G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        # And(q == Normal, q_next == SafeWarning, G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, t)),
         And(q == Normal, q_next == Throttling, G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, t)),
         And(q == Normal, q_next == SoftBraking, G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
         And(q == Normal, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
         
         # From SafeWarning (e6-e10)
-        And(q == SafeWarning, q_next == Normal, G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == SafeWarning, q_next == SafeWarning, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == SafeWarning, q_next == Throttling, G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == SafeWarning, q_next == SoftBraking, G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == SafeWarning, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        # And(q == SafeWarning, q_next == Normal, G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        # And(q == SafeWarning, q_next == SafeWarning, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        # And(q == SafeWarning, q_next == Throttling, G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        # And(q == SafeWarning, q_next == SoftBraking, G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        # And(q == SafeWarning, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
         
         # From Throttling (e11-e15)
         And(q == Throttling, q_next == Normal, G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == Throttling, q_next == SafeWarning, G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        # And(q == Throttling, q_next == SafeWarning, G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, t)),
         And(q == Throttling, q_next == Throttling, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t)),
         And(q == Throttling, q_next == SoftBraking, G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
         And(q == Throttling, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
         
         # From SoftBraking (e16-e20)
         And(q == SoftBraking, q_next == Normal, G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == SoftBraking, q_next == SafeWarning, G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        # And(q == SoftBraking, q_next == SafeWarning, G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, t)),
         And(q == SoftBraking, q_next == Throttling, G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, t)),
         And(q == SoftBraking, q_next == SoftBraking, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t)),
         And(q == SoftBraking, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
