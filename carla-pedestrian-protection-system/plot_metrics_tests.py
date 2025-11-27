@@ -7,13 +7,13 @@ import matplotlib.pyplot as plt
 
 
 INPUT_DIR = "./logs"
-OUTPUT_DIR = "./results4"
+OUTPUT_DIR = "./results3"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def load_all_logs(folder):
     records = []
     for filename in os.listdir(folder):
-        if filename.endswith("4.jsonl"):
+        if filename.endswith("3.jsonl"):
             scenario_name = filename.replace(".jsonl", "")
             with open(os.path.join(folder, filename), "r", encoding="utf-8") as f:
                 for line in f:
@@ -167,10 +167,34 @@ metrics_df = metrics_df[(metrics_df["d_min"].isna()) | (metrics_df["d_min"] < 15
 metrics_df["day_night"] = metrics_df["is_day"].map({True: "Day", False: "Night"})
 metrics_df["points_ncap"] = metrics_df.apply(compute_scenario_score, axis=1)
 
+# ============================
+# 1) FUNZIONE CI + FORMATO LATEX
+# ============================
+def compute_residual_speed_latex(series):
+    series = pd.to_numeric(series.dropna(), errors="coerce")
+    n = len(series)
+
+    if n == 0:
+        return None  # no collision → nothing to compute
+
+    if n == 1:
+        m = series.iloc[0]
+        return f"{m:.2f} ± 0.00"
+
+    mean = series.mean()
+    std = series.std(ddof=1)
+    ci = 1.96 * std / np.sqrt(n)
+
+    return f"{mean:.2f} ± {ci:.2f}"
+
+
+
+# ============================
+# 2) AGGREGAZIONE BASE
+# ============================
 agg_metrics = (
     metrics_df.groupby(["scenario_name", "code", "speed_kmh", "day_night"])
     .agg({
-        "residual_speed_kmh": "mean",
         "reaction_time_ttc_mean": "mean",
         "reaction_time_sim_mean": "mean",
         "stop_distance_mean": "mean",
@@ -183,6 +207,23 @@ agg_metrics = (
     })
     .reset_index()
 )
+
+# ============================
+# 3) AGGIUNTA COLONNA LATEX
+# ============================
+residual_group = (
+    metrics_df.groupby(["scenario_name", "code", "speed_kmh", "day_night"])["residual_speed_kmh"]
+    .apply(compute_residual_speed_latex)
+    .reset_index(name="residual_speed_latex")
+)
+
+# MERGE PULITO
+agg_metrics = agg_metrics.merge(
+    residual_group,
+    on=["scenario_name", "code", "speed_kmh", "day_night"],
+    how="left"
+)
+
 
 agg_metrics["collision_rate"] = agg_metrics["with_pedestrian"]
 agg_metrics["emergency_brake_rate"] = (
