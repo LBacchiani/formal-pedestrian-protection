@@ -62,13 +62,15 @@ pip install -r requirements.txt
 
 The repository includes multiple scenario scripts (`test1.py`, `test2.py`, etc.), each corresponding to a Euro NCAP pedestrian test case:
 
-| Test Script        | Scenario Type            | Expected Speeds     |
-|--------------------|--------------------------|----------------------|
-| `test1.py`         | CPFA (Far Side Adult)    | **30 or 50 km/h**   |
-| `test2.py`         | CPNA (Near Side Adult)   | **30 or 50 km/h**   |
-| `test3.py`         | CPNCO (Near Crossing Obstructed) | **30 or 50 km/h** |
-| `test4_o.py`       | CPTA (opposite direction pedestrian) | **10 or 20 km/h** |
-| `test4_s.py`       | CPTA (same direction pedestrian)     | **10 km/h**        |
+### Test Scenario Matrix
+
+| Script        | Scenario Type | Direction      | Expected Speeds   |
+|--------------|----------------|----------------|--------------------|
+| `test1.py`   | CPFA           | Perpendicular  | **30 / 50 km/h**  |
+| `test2.py`   | CPNA           | Perpendicular  | **30 / 50 km/h**  |
+| `test3.py`   | CPNCO          | Perpendicular  | **30 / 50 km/h**  |
+| `test4_o.py` | CPTA           | Opposite       | **10 / 20 km/h**  |
+| `test4_s.py` | CPTA           | Same           | **10 km/h**       |
 
 
 ### Running a Scenario
