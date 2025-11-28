@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY automa.py vehicle_dt.py /app/
+COPY automaton.py vehicle_dt.py props.py z3_automaton.py test.py /app/
 
 RUN pip install --no-cache-dir \
     z3-solver \

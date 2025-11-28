@@ -46,9 +46,10 @@ This folder contains the full scenario runner pipeline for evaluating AEB pedest
 
 ### Requirements
 - **CARLA Simulator ≥ 0.9.15**
-- **Python 3.9–3.10**
+- **Python 3.8**
 - **NVIDIA GPU** (mandatory for YOLOv8-based pedestrian detection)
 - **CUDA-compatible drivers**
+- **Linux operative system**
 
 ### Creating the Anaconda Environment (Python 3.8)
 
@@ -94,7 +95,7 @@ and automatically save:
 
 ---
 
-## Batch Execution (Linux Only)
+## Batch Execution
 
 You can execute multiple full-scenario runs automatically using:
 
