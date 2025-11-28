@@ -1,4 +1,5 @@
-# formal-pedestrian-protection# Hybrid Automaton Digital Twin & CARLA Pedestrian Protection System
+# Formal-pedestrian-protection
+# Hybrid Automaton Digital Twin & CARLA Pedestrian Protection System
 
 This repository is organized into two major components:
 
@@ -9,7 +10,7 @@ These two parts work together to evaluate pedestrian-related Euro NCAP AEB scena
 
 ---
 
-## 1. Digital Twin & Hybrid Automaton (`automaton/`)
+## 1. Digital Twin & Hybrid Automaton & Formal definition
 
 This module contains:
 
@@ -93,7 +94,7 @@ and automatically save:
 
 ---
 
-## 🔁 Batch Execution (Linux Only)
+## Batch Execution (Linux Only)
 
 You can execute multiple full-scenario runs automatically using:
 
@@ -106,7 +107,7 @@ These scripts cycle through all tests at all configured speeds and create separa
 
 ---
 
-## 📦 Output Structure
+## Output Structure
 
 - `logs/` — simulation Metrics  
 - `results1/`, `results2/`, `results3/`, `results4/` — aggregated metrics for each test batch  
@@ -115,7 +116,7 @@ These scripts cycle through all tests at all configured speeds and create separa
 ---
 
 
-## 📁 Repository Structure (Simplified)
+## Repository Structure (Simplified)
 
 ```
 .
