@@ -1,0 +1,436 @@
+\documentclass[journal]{IEEEtran}
+\usepackage{amsmath,amsfonts}
+\usepackage{algorithmic}
+\usepackage{array}
+\usepackage[caption=false,font=normalsize,labelfont=sf,textfont=sf]{subfig}
+\usepackage{textcomp}
+\usepackage{stfloats}
+\usepackage{url}
+\usepackage{verbatim}
+\usepackage{graphicx}
+\usepackage{amssymb}
+\usepackage{amsthm}           % Theorem environments
+\usepackage{cleveref}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\theoremstyle{property}
+\newtheorem{property}{Property}[section]
+\hyphenation{op-tical net-works semi-conduc-tor IEEE-Xplore}
+\usepackage{balance}
+
+\newcommand{\inv}[1]{\mathsf{Inv}(\mathsf{#1})}
+\newcommand{\thr}[1]{\mathsf{#1}}
+
+\newcommand{\detd}{\mathsf{detected}}
+\newcommand{\cross}{\mathsf{crossing}}
+\newcommand{\validD}{\mathsf{valid\_d}}
+\newcommand{\validC}{\mathsf{valid\_c}}
+\newcommand{\validU}{\mathsf{valid\_u}}
+\newcommand{\sd}{\mathsf{s\_TTC}}
+\newcommand{\srd}{\mathsf{sr\_TTC}}
+\newcommand{\rcd}{\mathsf{rc\_TTC}}
+\newcommand{\cd}{\mathsf{c\_TTC}}
+\newcommand{\unc}{\mathsf{doubt}}
+\newcommand{\sns}{\mathsf{sense}}
+\newcommand{\rst}{\mathsf{reset}}
+
+% --- Standard CTL Macros (not provided but necessary) ---
+\newcommand{\AG}{\text{AG}}
+\newcommand{\AX}{\text{AX}}
+\newcommand{\EX}{\text{EX}}
+\newcommand{\G}[2]{\mathsf{G}(#1, #2)} % Transition guard
+
+% --- States (for readability) ---
+\newcommand{\Normal}{\mathsf{Normal}}
+\newcommand{\Warning}{\mathsf{Warning}}
+\newcommand{\Throttle}{\mathsf{Throttle}}
+\newcommand{\SoftBrake}{\mathsf{SoftBrk}}
+\newcommand{\EmergencyBrake}{\mathsf{EmergencyBrk}}
+\newcommand{\st}[1]{\mathsf{#1}}
+
+\begin{document}
+\title{Pedestrian Protection Hybrid Automaton Formalization}
+%\author{IEEE Publication Technology Department}
+
+
+\maketitle
+
+
+
+The hybrid automaton formalized here captures the decision logic governing pedestrian-related interventions. Its structure reflects a separation between discrete locations, encoding the high-level behavioral states of the controller, and a continuous component responsible for maintaining timing information and buffering perception-related quantities. The following sections collect all formal ingredients used by the automaton, including the thresholds that parameterize the guards and invariants, the predicates over buffered observations, and the reset and sensing functions.
+
+\begin{table}[h!]
+\caption{Automaton thresholds}
+\setlength{\tabcolsep}{8pt}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{|c|c|c|}
+\hline
+{\bf name} & {\bf semantic}  & {\bf value}\\
+\hline
+$n$   &    dimension of the automaton & 10       \\
+\hline
+$\thr{D\_FREQ}$   &    detection frequency ($ms$) & 100      \\
+\hline
+$\thr{RT\_H}$     &    human reaction time ($ms)$ & 700\\      \hline
+$\thr{TH\_C}$  &  threshold for valid detection  & 0.4       \\\hline
+$\thr{D\_STALE}$  &   upper bound for stale detections ($ms$) & 300        \\\hline
+$\thr{C\_STALE}$  &   upper bound for stale crossing  ($ms$) & 300       \\ \hline
+$\thr{TH\_TTC\_s}$ &   threshold for safe TTC ($ms$) & 3500        \\\hline
+$\thr{TH\_TTC\_r}$ &   threshold for risky TTC ($ms$) & 2000      \\\hline
+$\thr{TH\_TTC\_c}$ &   threshold for critical TTC ($ms$) & 1000       \\\hline
+$\thr{S\_CONS}$ &  \% for for safe TTC classification  & 0.8       \\\hline
+$\thr{SR\_CONS}$ &  \% for safe-risky TTC classification & 0.6         \\\hline
+$\thr{RC\_CONS}$ &  \% for risky-critical TTC classification & 0.4        \\\hline
+$\thr{C\_CONS}$ &  \% for critical TTC classification & 0.2       \\\hline
+$\thr{CONS}$ &  \% of agreeing frames & 0.8  \\\hline  
+\end{tabular}
+\label{tab:thr}
+\end{table}
+
+The numerical parameters in Table~\ref{tab:thr} regulate how perception evidence is aggregated and how fast stale information is discarded. They are intentionally chosen so that reaction-relevant quantities (e.g., TTC estimates) are evaluated over a short, recent observation window, allowing the controller to remain responsive while filtering short-lived outliers. Based on these parameters, we now introduce the predicates used in the invariants and guards.
+
+\begin{definition}[Discrete Locations]
+The finite set of discrete locations $L$ is defined as follows.
+\[
+\begin{aligned}
+    L = \{&\Normal, 
+    % \Warning, 
+    \Throttle, \SoftBrake, \EmergencyBrake\},
+\end{aligned}
+\]
+\end{definition}
+
+
+\begin{definition}[State Variables]\label{def:vars}
+The automaton state variable set is defined as follows.
+\[
+\begin{aligned}
+X = \{C_0,\ldots, C_{n-1}, TTC_0,\ldots, &TTC_{n-1}, \\ 
+&cs_0,\ldots, cs_{n-1}, s_d, s_c, t\}
+\end{aligned}
+\]
+where:
+\begin{itemize}
+    \item \(n\) is the automaton dimension;
+    \item \(C_i \in [0,1], \text{ with } i = 0,\ldots,n-1\): confidence of the pedestrian detection in the \(i\)-th frame;
+    \item \(TTC_i > 0, \text{ with } i = 0,\ldots,n-1\): estimated time-to-collision in the \(i\)-th frame;
+    \item \(cs_i \in \{0,1\}, \text{ with } i = 0,\ldots,n-1\): pedestrian crossing indicator in the \(i\)-th frame;
+    \item \(s_d, s_c\): timers for detection staleness, crossing staleness, respectively;
+    \item \(t\): time since the last sensor update.
+\end{itemize}
+\end{definition}
+\emph{In the following, all free variables belong to $X$ and its valuation to the closest $x$}. 
+
+
+\begin{definition}[Initial State]\label{def:init}
+We define the partial function $\thr{Init} : L \rightharpoonup 2^{\mathbb{R}^n}$ as $\thr{Init}(\Normal) = x_{init}$, 
+where $x_{init}$ is the valuation of $X$ containing: 
+\begin{itemize}
+    \item $C_i = 0, cs_i = 0, \forall i \in [0,n-1]$;
+    \item $TTC_i = \thr{NO\_TTC},\forall i \in [0,n-1]$, where $\thr{NO\_TTC}$ is a sentinel value;
+    \item $s_d = \thr{STALE}, s_c = \thr{STALE}$, where $\thr{STALE}$ is a sentinel value;
+    \item $t = 0$.
+\end{itemize}
+\end{definition}
+
+
+\begin{definition}[Continuous evolution]\label{def:continuous_dyn}
+We define the function $f : L \times \mathbb{R}^n \to  \mathbb{R}^n$ as $f(l,x) = \dot{x}, \forall l \in L$, 
+where $x$ is a valuation of $X$ and $\dot{x}$ is a valuation of $\dot{X}$, containing: 
+\begin{itemize}
+    \item $\dot{C_i} = 0, \dot{TTC_i} = 0, \dot{cs_i} = 0, \forall i \in [0,n-1]$.
+    \item $\dot{s_d} = 1, \dot{s_c} = 1, \dot{t} = 1$.
+\end{itemize}
+\end{definition}
+
+The predicates below formalize the conditions under which a sequence of 
+buffered measurements provides sufficiently strong evidence of a detection or a crossing event. 
+Each predicate follows the same structural pattern: it inspects the most recent entries of the 
+buffer and checks for temporal consistency, thereby avoiding spurious mode switches due to isolated sensor noise. 
+
+\begin{definition}[Detection Predicate]\label{def:app_det_p}
+    Given a valuation $x \in \mathbb{R}^n$ of $X$, the predicate $\detd$ is defined as follows. 
+    \[
+        \begin{aligned}
+                \detd(x) = \forall i \in [0,\frac{\thr{RT\_H}}{2 \cdot \thr{D\_FREQ}}] \; . \; C_i \geq \thr{TH\_C}
+        \end{aligned}
+    \]
+\end{definition}
+
+\begin{definition}[Valid detection]\label{def:app_valid_d}
+Given a valuation $x \in \mathbb{R}^n$ of $X$, the predicate $\validD$ is defined as follows.
+    \[
+        \begin{aligned}
+                \validD(x) = \detd(x) \lor s_d < \thr{D\_STALE}
+        \end{aligned}
+    \]
+\end{definition}
+
+\begin{definition}[Crossing predicate]\label{def:app_cross}
+Given a valuation $x \in \mathbb{R}^n$ of $X$, the predicate $\cross$ is defined as follows.
+    \[
+        \begin{aligned}
+            \cross(x) = \forall i \in [0,\frac{\thr{RT\_H}}{2 \cdot \thr{D\_FREQ}}] \; . \; cs_i = 1
+        \end{aligned}
+    \]
+\end{definition}
+
+
+\begin{definition}[Valid crossing]\label{def:app_valid_cross}
+Given a valuation $x \in \mathbb{R}^n$ of $X$, the predicate $\validC$ is defined as follows.
+    \[
+        \validC(x) = \cross(x) \lor s_c < \thr{C\_STALE}
+    \]
+\end{definition}
+
+Threat classification relies on estimating TTC over the buffered frames. To mitigate the influence of occasional misestimates, each TTC-level predicate uses a consensus requirement over a prefix of the buffer, scaled according to the severity of the corresponding threat class. Lower TTC thresholds naturally require fewer agreeing observations, reflecting the need to react quickly as risk increases.
+
+\begin{definition}[Safe distance predicate]\label{def:app_sd}
+Given a valuation $x \in \mathbb{R}^n$ of $X$, the predicate $\sd$ is defined as follows. 
+\[
+    \begin{aligned}
+             \sd(x) = \sum_{i=0}^{k} P_i \geq \lceil k \cdot \thr{CONS}\rceil
+    \end{aligned}
+\]
+where $P_i = 1$ if $TTC_i > \thr{TH\_TTC\_s}$, otherwise $P_i = 0$ and $k = \lceil n \cdot \thr{S\_CONS} \rceil$.
+    
+\end{definition}
+
+\begin{definition}[Safe-Risky TTC predicate]\label{def:app_srd}
+Given a valuation $x \in \mathbb{R}^n$ of $X$, the predicate $\srd$ is defined as follows. 
+\[
+    \begin{aligned}
+             \srd(x) = \sum_{i=0}^{k} P_i \geq \lceil k \cdot \thr{CONS}\rceil
+    \end{aligned}
+\]
+where $P_i = 1$ if $TTC_i \leq \thr{TH\_TTC\_s}$, otherwise $P_i = 0$ and $k = \lceil n \cdot \thr{SR\_CONS} \rceil$.
+    
+\end{definition}
+
+\begin{definition}[Risky-Critical TTC predicate]\label{def:app_rcd}
+Given a valuation $x \in \mathbb{R}^n$ of $X$, the predicate $\rcd$ is defined as follows. 
+\[
+    \begin{aligned}
+             \rcd(x) = \sum_{i=0}^{k} P_i \geq \lceil k \cdot \thr{CONS}\rceil
+    \end{aligned}
+\]
+where $P_i = 1$ if $TTC_i \leq \thr{TH\_TTC\_r}$, otherwise $P_i = 0$ and $k = \lceil n \cdot \thr{RC\_CONS} \rceil$.
+    
+\end{definition}
+
+\begin{definition}[Critical TTC predicate]\label{def:app_cdist}
+Given a valuation $x \in \mathbb{R}^n$ of $X$, the predicate $\cd$ is defined as follows. 
+\[
+    \begin{aligned}
+             \cd(x) = \sum_{i=0}^{k} P_i \geq \lceil k \cdot \thr{CONS}\rceil
+    \end{aligned}
+\]
+where $P_i = 1$ if $TTC_i \leq \thr{TH\_TTC\_c}$, otherwise $P_i = 0$ and $k = \lceil n \cdot \thr{C\_CONS} \rceil$.
+\end{definition}
+
+\begin{definition}[No TTC consensus]\label{def:app_uncertain}
+Given a valuation $x \in \mathbb{R}^n$ of $X$, the predicate $\unc$ as defined as follows.
+    \[
+    \begin{aligned}
+        \unc(x) = &\neg \sd(x) \land \neg \srd(x) \; \land \\ 
+        &\neg \rcd(x) \land \neg \cd(x)
+    \end{aligned}
+    \]
+\end{definition}
+
+The mode-dependent invariants express admissible continuous states while the automaton resides in a given discrete location. These invariants enforce that the controller remains in a state only as long as the corresponding perception conditions remain compatible with that mode. In particular, they ensure that stale information cannot lock the automaton in a mode indefinitely, and that a new sensor update (captured by the timer~$t$) eventually forces a transition through the sensing edge.
+
+\begin{definition}[State Invariants]\label{def:inv}
+The function $\mathsf{Inv}: L \to 2^{\mathbb{R}^n}$ is defined as follows.
+\[
+\begin{aligned}
+&\inv{Normal} = \{ x \in \mathbb{R}^n \mid t < \thr{D\_FREQ} \; \land \\ 
+&\quad(\neg \validD \lor \neg \validC \lor \sd \lor \unc(x)) \} \\
+% &\inv{\Warning} = \{ x \in X \mid \validD(x) \land \big(\neg \validC(x) \; \lor \\ 
+% &\qquad\qquad\unc(x)\big) \land t < \thr{D\_FREQ}\} \\
+&\inv{\Throttle} = \{ x \in \mathbb{R}^n \mid t < \thr{D\_FREQ} \land  \validC(x) \; \land \\ 
+&\quad \big((\srd(x) \land \neg \rcd(x) \, \land \neg \cd(x)) \lor \unc(x)\big)  \}\\
+&\inv{\SoftBrake} = \{ x \in \mathbb{R}^n \mid  t < \thr{D\_FREQ} \land\validC(x) \; \land \\ 
+&\quad \big((\rcd(x) \land \neg \cd(x)) \lor \unc(x) \big)\} \\
+&\inv{\EmergencyBrake} = \{ x \in \mathbb{R}^n \mid  t < \thr{D\_FREQ} \land \validC(x) \} 
+\end{aligned}
+\]
+\end{definition}
+
+The transition structure is fully enumerated by the edges in Definition~\ref{def:app_edges}. Each edge corresponds to a possible qualitative change in the controller’s behaviour, ranging from maintaining the current mode to escalating the intervention level. The resulting graph is acyclic except for the intentional self-loops, which allow the automaton to accommodate new measurements without generating unnecessary mode changes.
+
+\begin{definition}[Edges]\label{def:app_edges}
+ The set of edges $E \subseteq L \times L$ is $\{ e_1,\ldots e_{14}\}$, where
+\[
+\begin{aligned}
+e_1 &= (\Normal, \Normal) \\
+% e_2 &= (\Normal, \Warning) \\
+e_2 &= (\Normal, \Throttle) \\
+e_3 &= (\Normal, \SoftBrake) \\
+e_4 &= (\Normal, \EmergencyBrake) \\
+% e_6 &= (\Warning, \Normal) \\
+% e_7 &= (\Warning, \Warning) \\
+% e_8 &= (\Warning, \Throttle) \\
+% e_9 &= (\Warning, \SoftBrake) \\
+% e_{10} &= (\Warning, \EmergencyBrake) \\
+e_{5} &= (\Throttle, \Normal) \\
+% e_{12} &= (\Throttle, \Warning) \\
+e_{6} &= (\Throttle, \Throttle) \\
+e_{7} &= (\Throttle, \SoftBrake) \\
+e_{8} &= (\Throttle, \EmergencyBrake) \\
+e_{9} &= (\SoftBrake, \Normal) \\
+% e_{17} &= (\SoftBrake, \Warning) \\
+e_{10} &= (\SoftBrake, \Throttle) \\
+e_{11} &= (\SoftBrake, \SoftBrake) \\
+e_{12} &= (\SoftBrake, \EmergencyBrake) \\
+e_{13} &= (\EmergencyBrake, \Normal) \\
+e_{14} &= (\EmergencyBrake, \EmergencyBrake)
+\end{aligned}
+\]
+\end{definition}
+
+Guard conditions determine precisely when a discrete transition may fire. They combine substantive perception predicates with a timing constraint on~$t$, ensuring that transitions triggered by new sensor readings are prioritised over those triggered by stale information. Structurally, the guards partition all admissible states in such a way that the automaton remains deterministic whenever a transition is enabled.
+
+\begin{definition}[Guards]\label{def:app_guards}
+Guard conditions $G: E \to 2^{\mathbb{R}^n}$, for each edge, are defined as follows.
+\[
+\begin{aligned}
+G(e_1) &= \{x \in X \mid t \ge \thr{D\_FREQ}\} \\
+% G(e_2) &= \{x \in X \mid \validD(x) \land \neg \validC(x) \; \land  \\ 
+% & t < \thr{D\_FREQ} \}
+G(e_2)  &= \{x \in X \mid \validC(x) \land \srd(x) \; \land \\
+&\neg \rcd(x) \land \neg \cd(x) \land t < \thr{D\_FREQ} \} \\
+G(e_3)  &= \{x \in X \mid \validC(x) \land  
+\rcd(x) \; \land \\  & \neg \cd(x) \land t < \thr{D\_FREQ} \} \\
+G(e_4)  &= \{x \in X \mid \validC(x) \land \cd(x) \; \land \\ &t < \thr{D\_FREQ} \} \\
+G(e_{5}) &= \{x \in X \mid 
+\big(\neg \validD(x) \; \lor \\ &(\validC(x) \land \sd(x))\big) \land  t < \thr{D\_FREQ} \} \\
+G(e_{6}) &= G(e_1) \\
+G(e_{7}) &= G(e_3) \\
+G(e_{8}) &= G(e_4) \\
+G(e_{9}) &= G(e_5) \\
+G(e_{6}) &= G(e_1) \\
+G(e_{7}) &= G(e_3) \\
+G(e_{8}) &= G(e_4) \\
+G(e_{9}) &= G(e_5) \\
+\end{aligned}
+\]
+\[
+\begin{aligned}
+G(e_{10}) &= G(e_2) \\
+G(e_{11}) &= G(e_1) \\
+G(e_{12}) &= G(e_5)\\
+G(e_{13}) &= \{x \in X \mid \neg \validC(x)\} \\
+G(e_{14}) &= G(e_1) 
+\end{aligned}
+\]
+% \[
+% \begin{aligned}
+% % G(e_6)  &= \{x \in X \mid 
+% % (\neg \validD(x) \; \lor \\ &(\validC(x) \land 
+% % \sd(x)) \land  t < \thr{D\_FREQ} \} \\
+% % G(e_7)  &= G(e_1)& \\
+% % G(e_8) &= G(e_3) \\ 
+% % G(e_9) &= G(e_4) \\
+% % G(e_{10}) &= G(e_5) \\ 
+% % G(e_{12}) &= G(e_2) \\ 
+% % G(e_{17}) &= G(e_2) \\
+% \end{aligned}
+% \]
+\end{definition}
+
+The functions $\sns$ and $\rst$ govern how the continuous state is updated upon taking an edge. The former incorporates a fresh sensor measurement and shifts the history buffers, while the latter keeps the existing measurements but selectively resets the staleness counters. Together, they ensure that the automaton cleanly separates the arrival of new data from pure time-driven maintenance steps.
+
+
+\begin{definition}[Sense function]\label{def:app_sense}
+Given a valuation $x \in \mathbb{R}^n$ of $X$, the sense function $\sns: \mathbb{R}^n \to 2^{\mathbb{R}^n}$ is defined as follows.
+    \[
+    \begin{aligned}
+        \sns(x) = \{x' \in X \mid \phi(x,x')\}
+    \end{aligned}
+\]
+where, 
+\[
+\begin{aligned}
+x = (C_0,\ldots, C_{n-1}, &TTC_0,\ldots,TTC_{n-1}, \\ 
+&cs_0,\ldots, cs_{n-1}, s_d, s_c, t) 
+\end{aligned}
+\]
+and 
+\[
+\begin{aligned}
+x' = (C,C_0,\ldots,C_{n-2},&TTC,TTC_0,\ldots,TTC_{n-2}, \\ 
+&cs,cs_0,\ldots, cs_{n-2}, s_d, s_c, t'),
+\end{aligned}
+\]
+
+the predicate $\phi(x,x')$ holds if $t' = 0$, $C \in [0,1]$
+\[
+\begin{aligned}
+TTC &=
+  \begin{cases}
+    \thr{NO\_TTC} & \text{if } C < \thr{TH\_C},\\
+    v \in \mathbb{R}_{>0} & \text{otherwise,}
+  \end{cases}\\
+cs &=
+  \begin{cases}
+    0 & \text{if } C < \thr{TH\_C},\\
+    v \in \{0,1\} & \text{otherwise,}
+  \end{cases}
+\end{aligned}
+\]  
+\end{definition}
+
+\begin{definition}[Reset timers function]\label{def:app_reset_func}
+Given a valuation $x \in \mathbb{R}^n$ of $X$, the reset timers function $\rst: \mathbb{R}^n \to 2^{\mathbb{R}^n}$ is defined as follows.
+    \[
+    \begin{aligned}
+        &\rst(x) = \{x' \in X \mid \phi(x,x')\}
+    \end{aligned}
+\]
+where 
+\[
+\begin{aligned}
+x = (C_0,\ldots, C_{n-1}, &TTC_0,\ldots,TTC_{n-1}, \\ 
+&cs_0,\ldots, cs_{n-1}, s_d, s_c, t) 
+\end{aligned}
+\]
+and 
+\[
+\begin{aligned}
+x' = (C_0,\ldots, C_{n-1}, &TTC_0,\ldots,TTC_{n-1}, \\ 
+&cs_0,\ldots, cs_{n-1}, s_d', s_c', t) 
+\end{aligned}
+\]
+the predicate $\phi(x,x')$ holds if
+\[
+    \begin{aligned}
+    s_d' &=     
+    \begin{cases}
+        0 & \text{if } \detd(x) \\
+        s_d & \text{otherwise}
+    \end{cases}\\
+    s_c' &=     
+    \begin{cases}
+        0 & \text{if } \cross(x) \\
+        s_c & \text{otherwise}
+    \end{cases}\\
+    \end{aligned}
+\]
+\end{definition}
+
+
+\begin{definition}[Reset]\label{def:app_reset}
+Given a valuation $x \in \mathbb{R}^n$ of $X$, the function $R: \mathbb{R}^n \times X \to 2^X$, for each $e \in E$, is defined as follows.
+\[
+    R(e,x) = 
+    \begin{cases}
+        \sns(x) & \text{if } t \geq \thr{D\_FREQ} \\
+        \rst(x) & \text{otherwise}
+    \end{cases}
+\]
+\end{definition}
+
+Combining the discrete locations, continuous dynamics, invariants, guards, and reset maps yields a fully specified hybrid automaton that captures the entire control logic of the pedestrian-protection system. This formalisation is suitable both for implementation-level reference and for verification tasks such as reachability analysis or mode-transition correctness proofs.
+
+\end{document}
