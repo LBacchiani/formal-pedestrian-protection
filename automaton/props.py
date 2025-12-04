@@ -219,8 +219,10 @@ def prop_sudden_pedestrian_reaction():
     B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
     q = Const('q', State)
     q_start = Const('q_start', State)
-    s.add(initial_state(q, B_C, B_TTC, B_cs, s_d, s_c, t))
-    s.add(initial_state(q_start, B_C, B_TTC, B_cs, s_d, s_c, t))
+    s.add(q == Normal)
+    s.add(q_start == Normal)
+    s.add(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t))
+    s.add(invariant(q_start, B_C, B_TTC, B_cs, s_d, s_c, t))
     max_steps = RT_HALF_FRAMES # The maximum allowed steps
     t_cont = Int(f't_cont{0}')
     s.add(t_cont >= CAMERA_FREQ)
