@@ -270,7 +270,7 @@ def prop_sudden_pedestrian_reaction():
     if s.check() == sat:
         m = s.model()
         all_verified = False
-        print("\n✗ Sudden pedestrian safety violation: did NOT reach EmergencyBraking in time")
+        print("\n✗ Sudden pedestrian safety violation: did NOT reach SoftBraking/EmergencyBraking in time")
         print(f"  q_init = {model_val(m,q_start)}")
         print(f"  q_final = {model_val(m,q)}")
             # print state trace for context
