@@ -205,7 +205,7 @@ def invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t):
 # Common guard conditions
 def G_sense(B_C, B_TTC, B_cs, s_d, s_c, t):
     """Guard for sensing transitions (t >= CAM_FREQ)"""
-    return t >= CAMERA_FREQ
+    return t == CAMERA_FREQ
 
 def G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t):
     """Guard for transitions to Normal"""
@@ -299,6 +299,16 @@ def sense(B_C, B_TTC, B_cs, s_d, s_c, t,
     
     return And(constraints)
 
+def reset_helper(B, timer, TH, predicate):
+    constraints = []
+    first_idx_d = Int('first_idx_d')
+    constraints.append(Or([first_idx_d == i for i in range(N)] + [first_idx_d == -1]))
+    for i in range(N):
+        constraints.append(Implies(first_idx_d == i, And(B[i] >= TH, And([B[j] < TH for j in range(i)]), predicate )))
+    constraints.append(Implies(first_idx_d == -1, And([B[i] < TH for i in range(N)])))
+    constraints.append(timer == If(first_idx_d >= 0, CAMERA_FREQ * first_idx_d, TH))
+    return constraints
+
 def reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t,
                  B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next):
     """
@@ -313,20 +323,9 @@ def reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t,
         constraints.append(B_C_next[i] == B_C[i])
         constraints.append(B_TTC_next[i] == B_TTC[i])
         constraints.append(B_cs_next[i] == B_cs[i])
-    
     constraints.append(t_next == t + CAMERA_FREQ)
-    
-    # Reset staleness timers conditionally
-    constraints.append(
-        If(detected(B_C, B_TTC, B_cs, s_d, s_c, t),
-           s_d_next == 0,
-           s_d_next == s_d + CAMERA_FREQ)
-    )
-    constraints.append(
-        If(crossing(B_C, B_TTC, B_cs, s_d, s_c, t),
-           s_c_next == 0,
-           s_c_next == s_c + CAMERA_FREQ)
-    )    
+    constraints.extend(reset_helper(B_C, s_d_next, TH_D_STALE, detected(B_C, B_TTC, B_cs, s_d, s_c, t)))
+    constraints.extend(reset_helper(B_cs, s_c_next, TH_C_STALE, crossing(B_C, B_TTC, B_cs, s_d, s_c, t)))
     return And(constraints)
 
 # ============================================================================
