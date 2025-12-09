@@ -74,7 +74,7 @@ def detected(B_C, B_TTC, B_cs, s_d, s_c, t):
     """
     detected(X) = sum_{i=0}^{n-1} P(C_i >= TH_C) >= ceil(RT_H / (2 * CAM_FREQ))
     """
-    limit = int(min(N, RT_WINDOW_FRAMES))
+    limit = int(min(len(B_C), RT_WINDOW_FRAMES))    
     count = Sum([P(B_C[i] >= TH_C) for i in range(limit)])
     return count >= RT_HALF_FRAMES
 
@@ -127,7 +127,7 @@ def crossing(B_C, B_TTC, B_cs, s_d, s_c, t):
     """
     crossing(X) = sum_{i=0}^{n-1} P(cs_i = 1) >= ceil(RT_H / (2 * CAM_FREQ))
     """
-    limit = int(min(N, RT_WINDOW_FRAMES))
+    limit = int(min(len(B_cs), RT_WINDOW_FRAMES))
     count = Sum([P(B_cs[i] == 1) for i in range(limit)])
     return count >= RT_HALF_FRAMES
 
@@ -299,15 +299,67 @@ def sense(B_C, B_TTC, B_cs, s_d, s_c, t,
     
     return And(constraints)
 
-def reset_helper(B, timer, TH, predicate):
+# def reset_helper(B_C, B_TTC, B_cs, s_d, s_c, t, s_d_next, s_c_next):
+#     constraints = []
+#     first_idx_d = Int('first_idx_d')
+#     first_idx_c = Int('first_idx_c')
+#     constraints.append(Or([first_idx_d == i for i in range(N)] + [first_idx_d == -1]))
+#     constraints.append(Or([first_idx_c == i for i in range(N)] + [first_idx_c == -1]))
+#     for i in range(N):
+#         constraints.append(Implies(first_idx_d == i, detected(B_C[i:], B_TTC, B_cs, s_d, s_c, t)))
+#         constraints.append(Implies(first_idx_c == i, crossing(B_C, B_TTC, B_cs[i:], s_d, s_c, t)))
+
+#     constraints.append(s_d_next == If(first_idx_d >= 0, CAMERA_FREQ * first_idx_d, TH_D_STALE))
+#     constraints.append(s_c_next == If(first_idx_c >= 0, CAMERA_FREQ * first_idx_c, TH_C_STALE))
+
+#     return constraints
+def reset_helper(B_C, B_TTC, B_cs, s_d, s_c, t, s_d_next, s_c_next):
     constraints = []
     first_idx_d = Int('first_idx_d')
+    first_idx_c = Int('first_idx_c')
+
+    # Domain
     constraints.append(Or([first_idx_d == i for i in range(N)] + [first_idx_d == -1]))
+    constraints.append(Or([first_idx_c == i for i in range(N)] + [first_idx_c == -1]))
+
+    # Per-index predicates
+    pred_d = [ detected(B_C[i:], B_TTC[i:], B_cs[i], s_d, s_c, t) for i in range(N) ]
+    pred_c = [ crossing(B_C[i:], B_TTC[i:], B_cs[i:], s_d, s_c, t) for i in range(N) ]
+
+    # FIRST-INDEX semantics
     for i in range(N):
-        constraints.append(Implies(first_idx_d == i, And(B[i] >= TH, And([B[j] < TH for j in range(i)]), predicate )))
-    constraints.append(Implies(first_idx_d == -1, And([B[i] < TH for i in range(N)])))
-    constraints.append(timer == If(first_idx_d >= 0, CAMERA_FREQ * first_idx_d, TH))
+        # If first index is i, predicate_i must hold and all previous must NOT hold
+        constraints.append(
+            Implies(first_idx_d == i,
+                    And(pred_d[i], *[Not(pred_d[j]) for j in range(i)]))
+        )
+        constraints.append(
+            Implies(first_idx_c == i,
+                    And(pred_c[i], *[Not(pred_c[j]) for j in range(i)]))
+        )
+
+    # Case where predicate never holds
+    constraints.append(
+        Implies(first_idx_d == -1, And([Not(pred_d[i]) for i in range(N)]))
+    )
+    constraints.append(
+        Implies(first_idx_c == -1, And([Not(pred_c[i]) for i in range(N)]))
+    )
+
+    # Timer update
+    constraints.append(
+        s_d_next == If(first_idx_d == -1,
+                       TH_D_STALE,
+                       CAMERA_FREQ * first_idx_d)
+    )
+    constraints.append(
+        s_c_next == If(first_idx_c == -1,
+                       TH_C_STALE,
+                       CAMERA_FREQ * first_idx_c)
+    )
+
     return constraints
+
 
 def reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t,
                  B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next):
@@ -324,15 +376,14 @@ def reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t,
         constraints.append(B_TTC_next[i] == B_TTC[i])
         constraints.append(B_cs_next[i] == B_cs[i])
     constraints.append(t_next == t + CAMERA_FREQ)
-    constraints.extend(reset_helper(B_C, s_d_next, TH_D_STALE, detected(B_C, B_TTC, B_cs, s_d, s_c, t)))
-    constraints.extend(reset_helper(B_cs, s_c_next, TH_C_STALE, crossing(B_C, B_TTC, B_cs, s_d, s_c, t)))
+    constraints.extend(reset_helper(B_C, B_TTC, B_cs, s_d, s_c, t, s_d_next, s_c_next))
     return And(constraints)
 
 # ============================================================================
 # TRANSITION RELATION
 # ============================================================================
 
-def transition(q, q_next, B_C, B_TTC, B_cs, s_d, s_c, t):
+def transition(q, q_next, B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, C_new = None, TTC_new = None, cs_new = None):
     """
     Encodes all edges E and their guards G with reset R
     """
@@ -340,15 +391,19 @@ def transition(q, q_next, B_C, B_TTC, B_cs, s_d, s_c, t):
     # reset_constraint = reset_h(B_C, B_TTC, B_cs, s_d, s_c, t,
     #                             B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, s_u_next, t_next,
     #                             C_new, TTC_new, cs_new)
+
+
+    if C_new is None and TTC_new is None and cs_new is None:
+        C_new, TTC_new, cs_new = Real('C_new'), Real('TTC_new'), Real('cs_new')
     
     # Encode all edges with their guards
     transition_cases = Or(
         # From Normal (e1-e5)
-        And(q == Normal, q_next == Normal, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        And(q == Normal, q_next == Normal, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t), sense(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, C_new, TTC_new, cs_new)),
         # And(q == Normal, q_next == SafeWarning, G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == Normal, q_next == Throttling, G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == Normal, q_next == SoftBraking, G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == Normal, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        And(q == Normal, q_next == Throttling, G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, t), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)),
+        And(q == Normal, q_next == SoftBraking, G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, t), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)),
+        And(q == Normal, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)),
         
         # From SafeWarning (e6-e10)
         # And(q == SafeWarning, q_next == Normal, G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t)),
@@ -358,22 +413,22 @@ def transition(q, q_next, B_C, B_TTC, B_cs, s_d, s_c, t):
         # And(q == SafeWarning, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
         
         # From Throttling (e11-e15)
-        And(q == Throttling, q_next == Normal, G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        And(q == Throttling, q_next == Normal, G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)),
         # And(q == Throttling, q_next == SafeWarning, G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == Throttling, q_next == Throttling, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == Throttling, q_next == SoftBraking, G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == Throttling, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        And(q == Throttling, q_next == Throttling, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t), sense(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, C_new, TTC_new, cs_new)),
+        And(q == Throttling, q_next == SoftBraking, G_to_soft_braking(B_C, B_TTC, B_cs, s_d, s_c, t), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)),
+        And(q == Throttling, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)),
         
         # From SoftBraking (e16-e20)
-        And(q == SoftBraking, q_next == Normal, G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        And(q == SoftBraking, q_next == Normal, G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)),
         # And(q == SoftBraking, q_next == SafeWarning, G_to_safe_warning(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == SoftBraking, q_next == Throttling, G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == SoftBraking, q_next == SoftBraking, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == SoftBraking, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t)),
+        And(q == SoftBraking, q_next == Throttling, G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, t), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)),
+        And(q == SoftBraking, q_next == SoftBraking, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t), sense(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, C_new, TTC_new, cs_new)),
+        And(q == SoftBraking, q_next == EmergencyBraking, G_to_emergency_braking(B_C, B_TTC, B_cs, s_d, s_c, t), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)),
         
         # From EmergencyBraking (e21-e22)
-        And(q == EmergencyBraking, q_next == Normal, G_from_emergency(B_C, B_TTC, B_cs, s_d, s_c, t)),
-        And(q == EmergencyBraking, q_next == EmergencyBraking, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t))
+        And(q == EmergencyBraking, q_next == Normal, G_from_emergency(B_C, B_TTC, B_cs, s_d, s_c, t), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)),
+        And(q == EmergencyBraking, q_next == EmergencyBraking, G_sense(B_C, B_TTC, B_cs, s_d, s_c, t), sense(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, C_new, TTC_new, cs_new))
     )
     
     return transition_cases
