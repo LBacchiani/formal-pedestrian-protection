@@ -204,7 +204,7 @@ def invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t):
 
 # Common guard conditions
 def G_sense(B_C, B_TTC, B_cs, s_d, s_c, t):
-    """Guard for sensing transitions (t >= CAM_FREQ)"""
+    """Guard for sensing transitions (t == CAM_FREQ)"""
     return t == CAMERA_FREQ
 
 def G_to_normal(B_C, B_TTC, B_cs, s_d, s_c, t):

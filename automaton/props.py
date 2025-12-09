@@ -17,12 +17,14 @@ def print_buffer_model(model, buffer_vars):
     """Return a Python list of string values for buffer entries from model."""
     return [model_val(model, v) for v in buffer_vars]
 
-def print_ce_vars(m, s_d, s_c, t, B_C, B_TTC, B_cs):
+def print_ce_vars(m, B_C, B_TTC, B_cs, s_d, s_c, t,):
     """Utility function to print common continuous state variables"""
-    print(f"    s_d = {model_val(m, s_d)}, s_c = {model_val(m, s_c)}, t = {model_val(m, t)}")
     print(f"    B_C: {print_buffer_model(m, B_C)}")
     print(f"    B_TTC: {print_buffer_model(m, B_TTC)}")
     print(f"    B_cs: {print_buffer_model(m, B_cs)}")
+    print(f"    s_d = {model_val(m, s_d)}")
+    print(f"    s_c = {model_val(m, s_c)}") 
+    print(f"    t = {model_val(m, t)}")
 
 def element_constraints(C,TTC,cs):
     constraints = []
@@ -36,6 +38,13 @@ def buffer_constraints(B_C, B_TTC, B_cs):
     constraints = []
     for i in range(N):
         constraints.extend(element_constraints(B_C[i], B_TTC[i], B_cs[i]))
+    return And(constraints)
+
+def threat(C,TTC,cs):
+    constraints = []
+    constraints.append(C >= TH_C)
+    constraints.append(And(TTC >= 0, TTC <= TH_TTC_R))
+    constraints.append(cs == 1)
     return And(constraints)
 
 # ---------------------------------------------------------------------------
@@ -175,7 +184,6 @@ def prop_guards_complete():
 # ---------------------------------------------------------------------------
 
 
-
 def prop_sudden_pedestrian_reaction():
     """
     PROPERTY: Sudden pedestrian appears → EmergencyBraking within k steps (Liveness)
@@ -188,57 +196,70 @@ def prop_sudden_pedestrian_reaction():
 
     s = Solver()
     all_verified = True
-
-    # Initial variables (q is unbounded)
-    B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
-    q = Const('q', State)
-    q_start = Const('q_start', State)
-    s.add(q == Normal)
-    s.add(q_start == Normal)
-    s.add(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t))
     max_steps = RT_HALF_FRAMES # The maximum allowed steps
-    t_cont = Int(f't_cont{0}')
-    s.add(t_cont >= CAMERA_FREQ)
-    #s.add(t >= CAMERA_FREQ)
+
+
+    # discrete states (we keep them but won't enforce transitions here)
+    q_states = [Const(f'q_{i}', State) for i in range(max_steps + 1)]
+
+    # continuous snapshots: reset and sense intermediates
+    X_reset = [declare_continuous_vars(f'_{i}_reset') for i in range(max_steps + 1)]
+    X_sense = [declare_continuous_vars(f'_{i}_sense') for i in range(max_steps + 1)]
+
+    # threat/no-threat readings
+    C_threat, TTC_threat, cs_threat = Real('C_threat'), Real('TTC_threat'), Int('cs_threat')
+
+    # prepare initial reset[0] from a precursor buffer (no threat)
+    B_C_prec, B_TTC_prec, B_cs_prec, s_d_prec, s_c_prec, t_prec = declare_continuous_vars(f'{-1}_reset')
+    B_C_0_reset, B_TTC_0_reset, B_cs_0_reset, s_d_0_reset, s_c_0_reset, t_0_reset = X_reset[0]
+
+    s.add(buffer_constraints(B_C_0_reset, B_TTC_0_reset, B_cs_0_reset))
+    s.add(threat(C_threat, TTC_threat, cs_threat))
+    s.add(q_states[0] == Normal)
+    s.add(invariant(q_states[0], B_C_0_reset, B_TTC_0_reset, B_cs_0_reset, s_d_0_reset, s_c_0_reset, t_0_reset))
+
+
+    # Fixed cycle: for each i do
+    #   reset_timers(X_reset[i] -> X_sense[i])
+    #   sense(X_sense[i], threat -> X_reset[i+1])
+    for i in range(0, max_steps):
+        # unpack variables for clarity
+        B_C_i_reset, B_TTC_i_reset, B_cs_i_reset, s_d_i_reset, s_c_i_reset, t_i_reset = X_reset[i]
+        B_C_i_sense, B_TTC_i_sense, B_cs_i_sense, s_d_i_sense, s_c_i_sense, t_i_sense = X_sense[i]
+        B_C_ip1_reset, B_TTC_ip1_reset, B_cs_ip1_reset, s_d_ip1_reset, s_c_ip1_reset, t_ip1_reset = X_reset[i+1]
+
+        # 1) reset_timers: current reset -> produce sense-intermediate
+        s.add(reset_timers(
+            B_C_i_reset, B_TTC_i_reset, B_cs_i_reset, s_d_i_reset, s_c_i_reset, t_i_reset,
+            B_C_i_sense, B_TTC_i_sense, B_cs_i_sense, s_d_i_sense, s_c_i_sense, t_i_sense))
+
+        # 2) sense: inject the threat reading and produce next reset state
+        s.add(sense(B_C_i_sense, B_TTC_i_sense, B_cs_i_sense, s_d_i_sense, s_c_i_sense, t_i_sense,
+            B_C_ip1_reset, B_TTC_ip1_reset, B_cs_ip1_reset, s_d_ip1_reset, s_c_ip1_reset, t_ip1_reset,
+            C_threat, TTC_threat, cs_threat))
+
+        # Optionally enforce invariant on the reset result of the next step (keeps things realistic)
+        # s.add(invariant(q_states[i+1], B_C_ip1_reset, B_TTC_ip1_reset, B_cs_ip1_reset, s_d_ip1_reset, s_c_ip1_reset, t_ip1_reset))
+        s.add(Or(transition(q_states[i],
+                        q_states[i+1],
+                        B_C_ip1_reset, B_TTC_ip1_reset, B_cs_ip1_reset, s_d_ip1_reset, s_c_ip1_reset, t_ip1_reset),
+                        invariant(q_states[i+1], B_C_ip1_reset, B_TTC_ip1_reset, B_cs_ip1_reset, s_d_ip1_reset, s_c_ip1_reset, t_ip1_reset)
+            ))
+
 
     
+    s.add(q_states[i+1] != EmergencyBraking)
+    s.add(q_states[i+1] != SoftBraking)
 
-    for step in range(max_steps):
-        B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next = declare_continuous_vars(f"_next{step}")
-        #B_C_reset, B_TTC_reset, B_cs_reset, , s_c_reset, t_reset = declare_continuous_vars(f"_reset{step}")
-        C_new_critical = Real('C_new_critical') 
-        s.add(C_new_critical >= TH_C)
-        TTC_new_critical = Real('TTC_new_critical')
-        s.add(TTC_new_critical < TH_TTC_R)
-        cs_new_crossing = Int('cs_new_crossing')
-        s.add(cs_new_crossing == 1)
-        q_next = Const(f'q_next{step}', State)
-        t_cont_next = Int(f't_cont{step+1}')
-        s.add(sense(B_C, B_TTC, B_cs, s_d, s_c, t_cont, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_cont_next, C_new_critical, TTC_new_critical, cs_new_crossing))
-        s.add(Or(And(invariant(q, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_cont_next)), 
-        And(reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t_cont, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_cont_next), q == q_next, transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_cont))))
-        B_C, B_TTC, B_cs, s_d, s_c, t = B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next    
-    s.add(q != EmergencyBraking)
-    s.add(q != SoftBraking)
-    
-    
     if s.check() == sat:
         m = s.model()
         all_verified = False
-        print("\n✗ Sudden pedestrian safety violation: did NOT reach SoftBraking/EmergencyBraking in time")
-        print(f"  q_init = {model_val(m,q_start)}")
-        print(f"  q_final = {model_val(m,q)}")
-            # print state trace for context
-        print(f"  B_C: {print_buffer_model(m, B_C)}")
-        print(f"  B_TTC: {print_buffer_model(m, B_TTC)}")
-        print(f"  B_cs: {print_buffer_model(m, B_cs)}")
-        print(f"  t: {model_val(m, t_next)}")
-        print(f"TRANS: {m.eval(transition(q_start, q_next, B_C, B_TTC, B_cs, s_d, s_c, t))}")
-        print(f"INV: {m.eval(invariant(q_next, B_C, B_TTC, B_cs, s_d, s_c, t))}")
-        print(m.eval(s_r_dist(B_C, B_TTC, B_cs, s_d, s_c, t)))
+        print(model_val(m, q_states[i+1]))
+        print(f"\nSTEP {i} (after reset_timers -> sense)")
+        print("  produced X_reset[i+1] (from sense):")
+        print_ce_vars(m, B_C_ip1_reset, B_TTC_ip1_reset, B_cs_ip1_reset, s_d_ip1_reset, s_c_ip1_reset, t_ip1_reset)
     else:
         print("\n✓ Sudden pedestrian → EmergencyBraking within required steps: VERIFIED")
-
 
     print("="*70)
     return all_verified
