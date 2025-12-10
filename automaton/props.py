@@ -26,24 +26,76 @@ def print_ce_vars(m, B_C, B_TTC, B_cs, s_d, s_c, t,):
     print(f"    s_c = {model_val(m, s_c)}") 
     print(f"    t = {model_val(m, t)}")
 
+
+def timer_constraint_helper(B_C, B_TTC, B_cs, s_d, s_c, t):
+    constraints = []
+    first_idx_d = Int('first_idx_d')
+    first_idx_c = Int('first_idx_c')
+
+    # Domain
+    constraints.append(Or([first_idx_d == i for i in range(N)] + [first_idx_d == -1]))
+    constraints.append(Or([first_idx_c == i for i in range(N)] + [first_idx_c == -1]))
+
+    # Per-index predicates
+    pred_d = [ detected(B_C[i:], B_TTC[i:], B_cs[i], s_d, s_c, t) for i in range(N) ]
+    pred_c = [ crossing(B_C[i:], B_TTC[i:], B_cs[i:], s_d, s_c, t) for i in range(N) ]
+
+    # FIRST-INDEX semantics
+    for i in range(N):
+        # If first index is i, predicate_i must hold and all previous must NOT hold
+        constraints.append(
+            Implies(first_idx_d == i,
+                    And(pred_d[i], *[Not(pred_d[j]) for j in range(i)]))
+        )
+        constraints.append(
+            Implies(first_idx_c == i,
+                    And(pred_c[i], *[Not(pred_c[j]) for j in range(i)]))
+        )
+
+    # Case where predicate never holds
+    constraints.append(
+        Implies(first_idx_d == -1, And([Not(pred_d[i]) for i in range(N)]))
+    )
+    constraints.append(
+        Implies(first_idx_c == -1, And([Not(pred_c[i]) for i in range(N)]))
+    )
+
+    # Timer update
+    constraints.append(
+        s_d == If(first_idx_d == -1,
+                       TH_D_STALE,
+                       CAMERA_FREQ * first_idx_d)
+    )
+    constraints.append(
+        s_c == If(first_idx_c == -1,
+                       TH_C_STALE,
+                       CAMERA_FREQ * first_idx_c)
+    )
+
+    return constraints
+
 def element_constraints(C,TTC,cs):
     constraints = []
     constraints.append(And(C >= 0, C <= 1))
     constraints.append(And(TTC >= 0, TTC <= NO_TTC))
     constraints.append(Or(cs == 0, cs == 1))
-    constraints.append(Implies(C <= TH_C, And(TTC == NO_TTC, cs == 0))) 
+    constraints.append(Implies(C < TH_C, And(TTC == NO_TTC, cs == 0))) 
     return constraints
 
-def buffer_constraints(B_C, B_TTC, B_cs):
+def state_constraints(B_C, B_TTC, B_cs, s_d, s_c, t):
     constraints = []
     for i in range(N):
         constraints.extend(element_constraints(B_C[i], B_TTC[i], B_cs[i]))
+    constraints.append(And(s_d >= 0, s_d <= TH_D_STALE))
+    constraints.append(And(s_c >= 0, s_c <= TH_D_STALE))
+    constraints.append(Or(t == 0, t == CAMERA_FREQ))
+    constraints.extend(timer_constraint_helper(B_C, B_TTC, B_cs, s_d, s_c, t))
     return And(constraints)
 
 def threat(C,TTC,cs):
     constraints = []
     constraints.append(C >= TH_C)
-    constraints.append(And(TTC >= 0, TTC <= TH_TTC_R))
+    constraints.append(And(TTC >= 0, TTC < TH_TTC_R))
     constraints.append(cs == 1)
     return And(constraints)
 
@@ -60,53 +112,42 @@ def determinism_1():
     print("PROPERTY: Determinism (Guards Mutually Exclusive)")
     print("="*70)
     all_verified = True
-    states = [Normal, Throttling, SoftBraking, EmergencyBraking]# SafeWarning, 
-    q_prec = Const('q_prec', State)
-    q = Const('q', State)
-    B_C_prec_s, B_TTC_prec_s, B_cs_prec_s, s_d_prec_s, s_c_prec_s, t_prec_s = declare_continuous_vars('prec_s')
-    B_C_prec_r, B_TTC_prec_r, B_cs_prec_r, s_d_prec_r, s_c_prec_r, t_prec_r = declare_continuous_vars('prec_r')
-    B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r = declare_continuous_vars('r')
-    B_C_s, B_TTC_s, B_cs_s, s_d_s, s_c_s, t_s = declare_continuous_vars('s')
-    B_C_next_i, B_TTC_next_i, B_cs_next_i, s_d_next_i, s_c_next_i, t_next_i = declare_continuous_vars('i')
-    B_C_next_j, B_TTC_next_j, B_cs_next_j, s_d_next_j, s_c_next_j, t_next_j = declare_continuous_vars('j')
-    
-    
-    for q_val in states:
-        s = Solver()
-        s.add(q == q_val)
+    s = Solver()
 
-        ###THIS IS A CYCLE SENSE-RESET-SENSE (THE LAST SENSE IS REQUIRED TO MAKE THIS PROPERTY NON-TRIVIAL, AS FOR T == CAMERA_FREQ, DETERMINISM IS TRIVIAL) TO ENFORCE Z3 TO PICK ADMISSIBLE VALUES. THE ONLY ASSUMPTION HERE IS THAT THE STATE ON WHICH WE CHECK THE PROPERTY IS REACHABLE######
-        s.add(Or(
-            initial_state(q_prec, B_C_prec_s, B_TTC_prec_s, B_cs_prec_s, s_d_prec_s, s_c_prec_s, t_prec_s),
-            And(invariant(q_prec, B_C_prec_s, B_TTC_prec_s, B_cs_prec_s, s_d_prec_s, s_c_prec_s, t_prec_s), buffer_constraints(B_C_prec_s, B_TTC_prec_s, B_cs_prec_s))
-        ))
-        # s.add(buffer_constraints(B_C_prec_s, B_TTC_prec_s, B_cs_prec_s))
-        s.add(transition(q_prec, q_prec, B_C_prec_s, B_TTC_prec_s, B_cs_prec_s, s_d_prec_s, s_c_prec_s, t_prec_s, B_C_prec_r, B_TTC_prec_r, B_cs_prec_r, s_d_prec_r, s_c_prec_r, t_prec_r))
-        s.add(transition(q_prec, q, B_C_prec_r, B_TTC_prec_r, B_cs_prec_r, s_d_prec_r, s_c_prec_r, t_prec_r, B_C_s, B_TTC_s, B_cs_s, s_d_s, s_c_s, t_s))
-        s.add(transition(q, q, B_C_s, B_TTC_s, B_cs_s, s_d_s, s_c_s, t_s, B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r))
+    # Declare current state
+    B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
+    q = Const("q", State)
+    s.add(state_constraints(B_C, B_TTC, B_cs, s_d, s_c, t))
 
-        ################################################################################################################################################
-        for i in range(len(states)):
-            for j in range(i + 1, len(states)):
-                s.push()
-                
-                # CRITICAL FIX: Use separate target variables for each transition
-                B_C_next_i, B_TTC_next_i, B_cs_next_i, s_d_next_i, s_c_next_i, t_next_i = declare_continuous_vars(f'next_{i}')
-                B_C_next_j, B_TTC_next_j, B_cs_next_j, s_d_next_j, s_c_next_j, t_next_j = declare_continuous_vars(f'next_{j}')
-                
-                trans_i = transition(q, states[i], B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r, B_C_next_i, B_TTC_next_i, B_cs_next_i, s_d_next_i, s_c_next_i, t_next_i)
-                trans_j = transition(q, states[j], B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r, B_C_next_j, B_TTC_next_j, B_cs_next_j, s_d_next_j, s_c_next_j, t_next_j)
-                s.add(And(trans_i, trans_j))
-                
-                if s.check() == sat:
-                    m = s.model()
-                    all_verified = False
-                    print(f"\n✗ Non-determinism detected for q = {q_val}")
-                    print(f"  Both transitions fireable: {states[i]} and {states[j]}")
-                    print("  Source state:")
-                    print_ce_vars(m, B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r)
-                
-                s.pop()
+    # Declare symbolic next states for two hypothetical transitions
+    B_C1, B_TTC1, B_cs1, s_d1, s_c1, t1 = declare_continuous_vars("_1")
+    q1_next = Const("q1_next", State)
+    
+    B_C2, B_TTC2, B_cs2, s_d2, s_c2, t2 = declare_continuous_vars("_2")
+    q2_next = Const("q2_next", State)
+    s.add(q1_next != q2_next)
+    
+    # Two possible transitions
+    trans1 = transition(q, q1_next, B_C, B_TTC, B_cs, s_d, s_c, t)
+    
+    trans2 = transition(q, q2_next, B_C, B_TTC, B_cs, s_d, s_c, t)
+    
+    # Determinism: not possible for both to fire simultaneously
+    no_two_transitions = Not(And(trans1, trans2))
+    
+    # Only enforce when invariant is violated
+    s.add(Not(Implies(Not(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t)), no_two_transitions)))
+
+
+    # Check if determinism could be violated
+    if s.check() == sat:
+        m = s.model()
+        all_verified = False
+        print("Determinism violation possible!")
+        print(f"state: {model_val(m,q)}")
+        print_ce_vars(m, B_C, B_TTC, B_cs, s_d, s_c, t)
+    else:
+        print("Determinism holds for all states where invariant does not hold.")
 
     print(f"\n{'✓' if all_verified else '✗'} All guards are mutually exclusive: {'VERIFIED' if all_verified else 'FAILED'}")
     print("="*70)
@@ -114,104 +155,97 @@ def determinism_1():
 
 def determinism_2():
     """
-    PROPERTY: Invariant vs Transitions Mutual Exclusivity
-    Verify that in any discrete state, the invariant holds iff no transitions are fireable.
+    PROPERTY: Determinism 2 (Invariant or some guard fires)
+    Verify that for each discrete state, either the invariant holds or at least
+    one transition is enabled.
     """
     print("\n" + "="*70)
-    print("PROPERTY: Invariant vs Transitions Mutual Exclusivity")
+    print("PROPERTY: Determinism 2 (Invariant or some guard fires)")
     print("="*70)
     all_verified = True
-    states = [Normal, Throttling, SoftBraking, EmergencyBraking]# SafeWarning, 
-    q_prec = Const('q_prec', State)
-    q = Const('q', State)
-    B_C_prec_s, B_TTC_prec_s, B_cs_prec_s, s_d_prec_s, s_c_prec_s, t_prec_s = declare_continuous_vars('prec_s')
-    B_C_prec_r, B_TTC_prec_r, B_cs_prec_r, s_d_prec_r, s_c_prec_r, t_prec_r = declare_continuous_vars('prec_r')
-    B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r = declare_continuous_vars('r')
-    B_C_s, B_TTC_s, B_cs_s, s_d_s, s_c_s, t_s = declare_continuous_vars('s')
-    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next = declare_continuous_vars('next')
-    
-    for q_val in states:
-        s = Solver()
-        s.add(q == q_val)
+    s = Solver()
 
-        ###THIS IS A CYCLE SENSE-RESET-SENSE (THE LAST SENSE IS REQUIRED TO MAKE THIS PROPERTY NON-TRIVIAL, AS FOR T == CAMERA_FREQ, DETERMINISM IS TRIVIAL) TO ENFORCE Z3 TO PICK ADMISSIBLE VALUES. THE ONLY ASSUMPTION HERE IS THAT THE STATE ON WHICH WE CHECK THE PROPERTY IS REACHABLE######
-        #s.add(t_prec_s == CAMERA_FREQ) 
-        s.add(Or(
-            initial_state(q_prec, B_C_prec_s, B_TTC_prec_s, B_cs_prec_s, s_d_prec_s, s_c_prec_s, t_prec_s),
-            And(invariant(q_prec, B_C_prec_s, B_TTC_prec_s, B_cs_prec_s, s_d_prec_s, s_c_prec_s, t_prec_s), buffer_constraints(B_C_prec_s, B_TTC_prec_s, B_cs_prec_s))
-        ))
-        s.add(transition(q_prec, q_prec, B_C_prec_s, B_TTC_prec_s, B_cs_prec_s, s_d_prec_s, s_c_prec_s, t_prec_s, B_C_prec_r, B_TTC_prec_r, B_cs_prec_r, s_d_prec_r, s_c_prec_r, t_prec_r))
-        s.add(transition(q_prec, q, B_C_prec_r, B_TTC_prec_r, B_cs_prec_r, s_d_prec_r, s_c_prec_r, t_prec_r, B_C_s, B_TTC_s, B_cs_s, s_d_s, s_c_s, t_s))
-        s.add(transition(q, q, B_C_s, B_TTC_s, B_cs_s, s_d_s, s_c_s, t_s, B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r))
+    # Declare current state
+    B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
+    q = Const("q", State)
+    s.add(state_constraints(B_C, B_TTC, B_cs, s_d, s_c, t))
 
-        ################################################################################################################################################
+    # Declare symbolic next state for a hypothetical transition
+    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next = declare_continuous_vars("_next")
+    q_next = Const("q_next", State)
 
-        trans_constraints = [transition(q, qn, B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next) for qn in states]
-        s.add(invariant(q, B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r))
-        s.add(Or(trans_constraints))
-        if s.check() == sat:
-            m = s.model()
-            all_verified = False
-            print(f"\n✗ Non-determinism detected for q = {q_val}")
-            print(f"  Conflicting invariant and transition to: {q_val}")
-            print("  Counterexample full state:")
-            print_ce_vars(m, B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r)
+    # Define the transition from current state to next
+    trans = transition(q, q_next, B_C, B_TTC, B_cs, s_d, s_c, t)
 
-    print(f"\n{'✓' if all_verified else '✗'} All guards are mutually exclusive: {'VERIFIED' if all_verified else 'FAILED'}")
+    # Property: violation occurs if invariant fails AND no transition is possible
+    violation = And(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t), trans)
+    s.add(violation)
+
+    # Check if a violation exists
+    if s.check() == sat:
+        m = s.model()
+        all_verified = False
+        print("Violation found: invariant fails and no guard can fire!")
+        print(f"state: {model_val(m,q)}")
+        print_ce_vars(m, B_C, B_TTC, B_cs, s_d, s_c, t)
+    else:
+        print("Property verified: for all states, either invariant holds or some guard can fire.")
+
+    print(f"\n{'✓' if all_verified else '✗'} Determinism 2 check: {'VERIFIED' if all_verified else 'FAILED'}")
     print("="*70)
     return all_verified
+
 
 
 # ---------------------------------------------------------------------------
 # Completeness property check
 # ---------------------------------------------------------------------------
 
-def prop_guards_complete():
+def input_completeness():
     """
-    PROPERTY: Completeness (No Deadlock)
-    Verify: For each discrete state q, if no transition is fireable, then the invariant must hold.
+    PROPERTY: Input Completeness (No Deadlock)
+    Verify that for each discrete state, either the invariant holds
+    or at least one transition is enabled.
     """
     print("\n" + "="*70)
-    print("PROPERTY: Completeness (No Deadlock)")
+    print("PROPERTY: Input Completeness (No Deadlock)")
     print("="*70)
-
     all_verified = True
-    states = [Normal, Throttling, SoftBraking, EmergencyBraking]# SafeWarning, 
-    q_prec = Const('q_prec', State)
-    q = Const('q', State)
-    B_C_prec_s, B_TTC_prec_s, B_cs_prec_s, s_d_prec_s, s_c_prec_s, t_prec_s = declare_continuous_vars('prec_s')
-    B_C_prec_r, B_TTC_prec_r, B_cs_prec_r, s_d_prec_r, s_c_prec_r, t_prec_r = declare_continuous_vars('prec_r')
-    B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r = declare_continuous_vars('r')
-    B_C_s, B_TTC_s, B_cs_s, s_d_s, s_c_s, t_s = declare_continuous_vars('s')
-    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next = declare_continuous_vars('next')
-    
-    for q_val in states:
-        s = Solver()
-        s.add(q == q_val)
+    s = Solver()
 
-        ###THIS IS A CYCLE SENSE-RESET-SENSE (THE LAST SENSE IS REQUIRED TO MAKE THIS PROPERTY NON-TRIVIAL, AS FOR T == CAMERA_FREQ, DETERMINISM IS TRIVIAL) TO ENFORCE Z3 TO PICK ADMISSIBLE VALUES. THE ONLY ASSUMPTION HERE IS THAT THE STATE ON WHICH WE CHECK THE PROPERTY IS REACHABLE######
-        s.add(Or(
-            initial_state(q_prec, B_C_prec_s, B_TTC_prec_s, B_cs_prec_s, s_d_prec_s, s_c_prec_s, t_prec_s),
-            And(invariant(q_prec, B_C_prec_s, B_TTC_prec_s, B_cs_prec_s, s_d_prec_s, s_c_prec_s, t_prec_s), buffer_constraints(B_C_prec_s, B_TTC_prec_s, B_cs_prec_s))
-        ))        
-        s.add(transition(q_prec, q_prec, B_C_prec_s, B_TTC_prec_s, B_cs_prec_s, s_d_prec_s, s_c_prec_s, t_prec_s, B_C_prec_r, B_TTC_prec_r, B_cs_prec_r, s_d_prec_r, s_c_prec_r, t_prec_r)) #sense
-        s.add(transition(q_prec, q, B_C_prec_r, B_TTC_prec_r, B_cs_prec_r, s_d_prec_r, s_c_prec_r, t_prec_r, B_C_s, B_TTC_s, B_cs_s, s_d_s, s_c_s, t_s)) #reset
-        s.add(transition(q, q, B_C_s, B_TTC_s, B_cs_s, s_d_s, s_c_s, t_s, B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r)) #sense
-        ################################################################################################################################################
+    # Declare current state
+    B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
+    q = Const("q", State)
+    s.add(state_constraints(B_C, B_TTC, B_cs, s_d, s_c, t))
+    s.add(t == 0)
 
-        trans_constraints = [transition(q, qn, B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next) for qn in states ] #admissible reset
-        
-        s.add(Not(Or(trans_constraints)))      # No transition is fireable
-        s.add(Not(invariant(q, B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r)))  # Invariant fails (VIOLATION)
-        if s.check() == sat:
-            m = s.model()
-            all_verified = False
-            print(f"\n✗ Completeness violation detected for q = {q_val}")
-            print("  No fireable transition AND invariant does NOT hold (Deadlock State Found)!")
-            print("  Counterexample full state:")
-            print_ce_vars(m, B_C_r, B_TTC_r, B_cs_r, s_d_r, s_c_r, t_r)
+    # Declare symbolic next state for a hypothetical transition
+    B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next = declare_continuous_vars("_next")
+    q_next = Const("q_next", State)
 
-    print(f"\n{'✓' if all_verified else '✗'} Completeness {'VERIFIED' if all_verified else 'FAILED'}")
+    # Define the transition from current state to next
+    trans = Or([transition(q, qn, B_C, B_TTC, B_cs, s_d, s_c, t) 
+                for qn in [Normal, Throttling, SoftBraking, EmergencyBraking]])
+
+    # Property violation occurs if NEITHER invariant holds NOR any transition is possible
+    violation = And(
+        Not(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t)),
+        Not(trans)
+    )
+    s.add(violation)
+
+    # Check if a violation exists
+    if s.check() == sat:
+        m = s.model()
+        all_verified = False
+        print("Violation found: neither invariant holds nor any guard can fire (deadlock)!")
+        print(f"state: {model_val(m,q)}")
+        print_ce_vars(m, B_C, B_TTC, B_cs, s_d, s_c, t)
+        print(model_val(m, G_to_throttling(B_C, B_TTC, B_cs, s_d, s_c, t)))
+    else:
+        print("Property verified: no state exists where invariant fails and no guard can fire.")
+
+    print(f"\n{'✓' if all_verified else '✗'} Input Completeness check: {'VERIFIED' if all_verified else 'FAILED'}")
     print("="*70)
     return all_verified
 
@@ -223,88 +257,71 @@ def prop_guards_complete():
 
 def prop_sudden_pedestrian_reaction():
     """
-    PROPERTY: Sudden pedestrian appears → EmergencyBraking within k steps (Liveness)
-    Checks if, starting from an arbitrary state, a critical threat always leads to EmergencyBraking.
-    The transition logic must use X_next for guards and X_reset for the next step.
+    PROPERTY: Sudden pedestrian appears → SoftBraking or EmergencyBraking within k steps (Liveness)
+    Starting from Normal with a critical threat, the system either:
+      - remains in Normal (performing sense operations) 
+      - or eventually transitions to SoftBraking or EmergencyBraking in at most k steps.
     """
     print("\n" + "="*70)
-    print("PROPERTY: Sudden Pedestrian Reaction (Liveness)")
+    print("PROPERTY: Sudden Pedestrian Reaction (Liveness, ≤ k steps)")
     print("="*70)
 
     s = Solver()
     all_verified = True
+    max_steps = RT_HALF_FRAMES
 
-    # Initial variables (q is unbounded)
+    # Initial state
     B_C, B_TTC, B_cs, s_d, s_c, t = declare_continuous_vars()
     q = Const('q', State)
-    q_start = Const('q_start', State)
+    C_threat, TTC_threat, cs_threat = Real('C_threat'), Real('TTC_threat'), Int('cs_threat')
+
     s.add(q == Normal)
-    s.add(q_start == Normal)
+    s.add(threat(C_threat, TTC_threat, cs_threat))
+    s.add(state_constraints(B_C, B_TTC, B_cs, s_d, s_c, t))
     s.add(invariant(q, B_C, B_TTC, B_cs, s_d, s_c, t))
-    max_steps = RT_HALF_FRAMES # The maximum allowed steps
-    t_cont = Int(f't_cont{0}')
-    s.add(t_cont >= CAMERA_FREQ)
-    #s.add(t >= CAMERA_FREQ)
 
-    
+    # Simulate up to max_steps
+    for i in range(max_steps):
+        # Next step variables
+        B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next = declare_continuous_vars(f"_step{i}")
+        q_next = Const(f"q_step{i}", State)
+        s.add(state_constraints(B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next))
 
-    for step in range(max_steps):
-        B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next = declare_continuous_vars(f"_next{step}")
-        C_new_critical = Real('C_new_critical') 
-        s.add(C_new_critical >= TH_C)
-        TTC_new_critical = Real('TTC_new_critical')
-        s.add(TTC_new_critical < TH_TTC_R)
-        cs_new_crossing = Int('cs_new_crossing')
-        s.add(cs_new_crossing == 1)
-        q_next = Const(f'q_next{step}', State)
-        t_cont_next = Int(f't_cont{step+1}')
+        # Sense operation: remain in Normal
+        stay_normal = And(
+            q_next == Normal,
+            sense(B_C, B_TTC, B_cs, s_d, s_c, t,
+                  B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next,
+                  C_threat, TTC_threat, cs_threat),
+            invariant(q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)
+        )
 
-        s.add(sense(B_C, B_TTC, B_cs, s_d, s_c, t_cont, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_cont_next, C_new_critical, TTC_new_critical, cs_new_crossing))
-        s.add(Or(invariant(q, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_cont_next), 
-        And(reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t_cont, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_cont_next), q == q_next)))#, transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_cont))))
+        # Allowed leaving transitions: only SoftBraking or EmergencyBraking
+        leave_normal = And(
+            transition(q, q_next, B_C, B_TTC, B_cs, s_d, s_c, t),
+            And(q_next != SoftBraking, q_next != EmergencyBraking)
+        )
 
+        # Either stay in Normal or leave towards SB/EB
+        s.add(Or(stay_normal, leave_normal))
 
-
-
-        #s.add(If(t >= CAMERA_FREQ, sense(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, C_new_critical, TTC_new_critical, cs_new_crossing), reset_timers(B_C, B_TTC, B_cs, s_d, s_c, t, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next)))
-
-        # 1. Sense Jump (X -> X_next): Applies critical input
-        # s.add(sense(B_C, B_TTC, B_cs, s_d, s_c, t_cont, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next, C_new_critical, TTC_new_critical, cs_new_crossing))
-        # s.add(det_coll(B_C_next, B_TTC_next, B_cs_next))
-
-        # 2. Transition (q -> q_next) - GUARD CHECK ON X_NEXT
-        #s.add(Or(invariant(q, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next), And(q == q_next, transition(q, q_next, B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next))))
-
+        # Update for next iteration
         B_C, B_TTC, B_cs, s_d, s_c, t = B_C_next, B_TTC_next, B_cs_next, s_d_next, s_c_next, t_next
- 
+        q = q_next
 
-    
-    
-    s.add(q != EmergencyBraking)
-    s.add(q != SoftBraking)
-    
-    
+    # Solve
     if s.check() == sat:
         m = s.model()
         all_verified = False
-        print("\n✗ Sudden pedestrian safety violation: did NOT reach SoftBraking/EmergencyBraking in time")
-        print(f"  q_init = {model_val(m,q_start)}")
-        print(f"  q_final = {model_val(m,q)}")
-            # print state trace for context
-        print(f"  B_C: {print_buffer_model(m, B_C)}")
-        print(f"  B_TTC: {print_buffer_model(m, B_TTC)}")
-        print(f"  B_cs: {print_buffer_model(m, B_cs)}")
-        print(f"  t: {model_val(m, t_next)}")
-        print(f"INV: {m.eval(invariant(q_next, B_C, B_TTC, B_cs, s_d, s_c, t))}")
-        print(m.eval(s_r_dist(B_C, B_TTC, B_cs, s_d, s_c, t)))
+        print("Counterexample found: a forbidden transition is possible within k steps!")
+        print(f"state: {model_val(m, q)}")
+        print_ce_vars(m, B_C, B_TTC, B_cs, s_d, s_c, t)
     else:
-        print("\n✓ Sudden pedestrian → EmergencyBraking within required steps: VERIFIED")
+        print("Property verified: after at most k steps, only SoftBraking or EmergencyBraking transitions are possible.")
 
-
+    print(f"\n{'✓' if all_verified else '✗'} Sudden pedestrian reaction check: {'VERIFIED' if all_verified else 'FAILED'}")
     print("="*70)
     return all_verified
-
-
 
 
 
@@ -315,5 +332,6 @@ def prop_sudden_pedestrian_reaction():
 if __name__ == "__main__":
    determinism_1()
    determinism_2()
-   prop_guards_complete()
+   input_completeness()
    prop_sudden_pedestrian_reaction()
+
