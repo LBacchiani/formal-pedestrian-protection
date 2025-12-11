@@ -83,7 +83,7 @@ def valid_d(B_C, B_TTC, B_cs, s_d, s_c, t):
     """
     valid_d(X) = detected(X) ∨ s_d < TH_D_stale
     """
-    return Or(detected(B_C, B_TTC, B_cs, s_d, s_c, t), s_d < TH_D_STALE)
+    return s_d < TH_D_STALE# Or(detected(B_C, B_TTC, B_cs, s_d, s_c, t), s_d < TH_D_STALE)
 
 def s_dist(B_C, B_TTC, B_cs, s_d, s_c, t):
     """
@@ -136,7 +136,7 @@ def valid_c(B_C, B_TTC, B_cs, s_d, s_c, t):
     """
     valid_c(X) = crossing(X) ∨ s_c < TH_C_stale
     """
-    return Or(crossing(B_C, B_TTC, B_cs, s_d, s_c, t), s_c < TH_C_STALE)
+    return s_c < TH_C_STALE #Or(crossing(B_C, B_TTC, B_cs, s_d, s_c, t), s_c < TH_C_STALE)
 
 def uncertain(B_C, B_TTC, B_cs, s_d, s_c, t):
     return And(
