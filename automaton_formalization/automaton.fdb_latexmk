@@ -1,6 +1,6 @@
 # Fdb version 3
-["pdflatex"] 1765447631 "/Users/lorenzobacchiani/Desktop/formal-pedestrian-protection/automaton_formalization/automaton.tex" "automaton.pdf" "automaton" 1765447633
-  "/Users/lorenzobacchiani/Desktop/formal-pedestrian-protection/automaton_formalization/automaton.tex" 1765447631 17386 183a7cd57ca895da702a22f73b9b55d6 ""
+["pdflatex"] 1765447703 "/Users/lorenzobacchiani/Desktop/formal-pedestrian-protection/automaton_formalization/automaton.tex" "automaton.pdf" "automaton" 1765447705
+  "/Users/lorenzobacchiani/Desktop/formal-pedestrian-protection/automaton_formalization/automaton.tex" 1765447703 17394 33924774a08eee28b7756c54119fc6e4 ""
   "/usr/local/texlive/2022/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/local/texlive/2022/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/local/texlive/2022/texmf-dist/fonts/tfm/adobe/times/ptmb7t.tfm" 1136768653 2172 fd0c924230362ff848a33632ed45dc23 ""
@@ -80,8 +80,8 @@
   "/usr/local/texlive/2022/texmf-var/fonts/map/pdftex/updmap/pdftex.map" 1647878959 4410336 7d30a02e9fa9a16d7d1f8d037ba69641 ""
   "/usr/local/texlive/2022/texmf-var/web2c/pdftex/pdflatex.fmt" 1664280332 2826436 e4e70f813af319d626e12da123db1d96 ""
   "/usr/local/texlive/2022/texmf.cnf" 1647878952 577 209b46be99c9075fd74d4c0369380e8c ""
-  "automaton.aux" 1765447632 1777 e5f33f6a67f899fa0ce97bb90e38a7a5 "pdflatex"
-  "automaton.tex" 1765447631 17386 183a7cd57ca895da702a22f73b9b55d6 ""
+  "automaton.aux" 1765447705 1777 e5f33f6a67f899fa0ce97bb90e38a7a5 "pdflatex"
+  "automaton.tex" 1765447703 17394 33924774a08eee28b7756c54119fc6e4 ""
   (generated)
   "automaton.aux"
   "automaton.log"
