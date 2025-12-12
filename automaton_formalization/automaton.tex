@@ -122,20 +122,21 @@ where:
 
 
 \begin{definition}[Initial State]\label{def:init}
-Being $n = |X|$, for any $x \in \mathbb{R}^n$, the predicate $\thr{Init}[X := x]$ holds if $x$ contains:  
+Being $n = |X|$, i.e., the number of variables in $X$, for any $v \in \mathbb{R}^n$, $\thr{Init}$ holds if $v$ is:  
 \begin{itemize}
     \item $C_i = 0, cs_i = 0, \, 0 \leq i < n$;
     \item $TTC_i = \thr{NO\_TTC},\,  0 \leq i < n$;
     \item $s_d = \thr{STALE}, s_c = \thr{STALE}$;
     \item $t = 0$.
 \end{itemize}
+$\thr{NO\_TTC}$ and $\thr{STALE}$ are sentinel values to denote a safe $TTC$ and stale data.
 \end{definition}
 
 
 \begin{definition}[Continuous evolution]\label{def:continuous_dyn}
-Being $n = |X|$, for any $l \in L$ and $x, \dot{x} \in \mathbb{R}^n$, the flow condition $f(l)[X,\dot{X} := x,\dot{x}]$ holds if $\dot{x}$ contains:
+For any $l \in L$, the flow condition $f(l)$ is the same and is defined as:
 \begin{itemize}
-    \item $\dot{C_i} = 0, \, \dot{TTC_i} = 0, \dot{cs_i} = 0, \, 0 \leq i < n$.
+    \item $\dot{C_i} = 0, \, \dot{TTC_i} = 0, \dot{cs_i} = 0, \, 0 \leq i < n$;
     \item $\dot{s_d} = 1, \dot{s_c} = 1, \dot{t} = 1$.
 \end{itemize}
 \end{definition}
@@ -146,10 +147,10 @@ Each predicate follows the same structural pattern: it inspects the most recent 
 buffer and checks for temporal consistency, thereby avoiding spurious mode switches due to isolated sensor noise. 
 
 \begin{definition}[Detection Predicate]\label{def:app_det_p}
-Being $n = |X|$, for any $x \in \mathbb{R}^n$, the predicate $\detd$ is defined as follows. 
+The predicate $\detd$ is defined as follows. 
     \[
         \begin{aligned}
-                \detd[X := x] = \forall i \in [0,\lceil \frac{\thr{RT\_H}}{2 \cdot \thr{D\_FREQ}} \rceil] \; . \; C_i \geq \thr{TH\_C}
+                \detd = \forall i \in [0,\lceil \frac{\thr{RT\_H}}{2 \cdot \thr{D\_FREQ}} \rceil] \; . \; C_i \geq \thr{TH\_C}
         \end{aligned}
     \]
 \end{definition}
@@ -158,16 +159,16 @@ Being $n = |X|$, for any $x \in \mathbb{R}^n$, the predicate $\detd$ is defined 
 % Being $n = |X|$, for any $x \in \mathbb{R}^n$ of $X$, the predicate $\validD$ is defined as follows.
 %     \[
 %         \begin{aligned}
-%                 \validD[X := x] = s_d < \thr{STALE}
+%                 \validD = s_d < \thr{STALE}
 %         \end{aligned}
 %     \]
 % \end{definition}
 
 \begin{definition}[Crossing predicate]\label{def:app_cross}
-Being $n = |X|$, for any $x \in \mathbb{R}^n$, the predicate $\cross$ is defined as follows.
+The predicate $\cross$ is defined as follows.
     \[
         \begin{aligned}
-            \cross[X := x] = \forall i \in [0,\lceil \frac{\thr{RT\_H}}{2 \cdot \thr{D\_FREQ}} \rceil ] \; . \; cs_i = 1
+            \cross = \forall i \in [0,\lceil \frac{\thr{RT\_H}}{2 \cdot \thr{D\_FREQ}} \rceil ] \; . \; cs_i = 1
         \end{aligned}
     \]
 \end{definition}
@@ -183,10 +184,10 @@ Being $n = |X|$, for any $x \in \mathbb{R}^n$, the predicate $\cross$ is defined
 Threat classification relies on estimating TTC over the buffered frames. To mitigate the influence of occasional misestimates, each TTC-level predicate uses a consensus requirement over a prefix of the buffer, scaled according to the severity of the corresponding threat class. Lower TTC thresholds naturally require fewer agreeing observations, reflecting the need to react quickly as risk increases.
 
 \begin{definition}[Safe distance predicate]\label{def:app_sd}
-Being $n = |X|$, for any $x \in \mathbb{R}^n$, the predicate $\sd$ is defined as follows. 
+The predicate $\sd$ is defined as follows. 
 \[
     \begin{aligned}
-             \sd[X := x] = \sum_{i=0}^{k} P_i \geq \lceil k \cdot \thr{CONS}\rceil
+             \sd = \sum_{i=0}^{k} P_i \geq \lceil k \cdot \thr{CONS}\rceil
     \end{aligned}
 \]
 where $P_i = 1$ if $TTC_i > \thr{TH\_TTC\_s}$, otherwise $P_i = 0$ and $k = \lceil n \cdot \thr{S\_CONS} \rceil$.
@@ -194,10 +195,10 @@ where $P_i = 1$ if $TTC_i > \thr{TH\_TTC\_s}$, otherwise $P_i = 0$ and $k = \lce
 \end{definition}
 
 \begin{definition}[Safe-Risky TTC predicate]\label{def:app_srd}
-Being $n = |X|$, for any $x \in \mathbb{R}^n$, the predicate $\srd$ is defined as follows. 
+The predicate $\srd$ is defined as follows. 
 \[
     \begin{aligned}
-             \srd[X := x] = \sum_{i=0}^{k} P_i \geq \lceil k \cdot \thr{CONS}\rceil
+             \srd = \sum_{i=0}^{k} P_i \geq \lceil k \cdot \thr{CONS}\rceil
     \end{aligned}
 \]
 where $P_i = 1$ if $TTC_i \leq \thr{TH\_TTC\_s}$, otherwise $P_i = 0$ and $k = \lceil n \cdot \thr{SR\_CONS} \rceil$.
@@ -205,10 +206,10 @@ where $P_i = 1$ if $TTC_i \leq \thr{TH\_TTC\_s}$, otherwise $P_i = 0$ and $k = \
 \end{definition}
 
 \begin{definition}[Risky-Critical TTC predicate]\label{def:app_rcd}
-Being $n = |X|$, for any $x \in \mathbb{R}^n$, the predicate $\rcd$ is defined as follows. 
+The predicate $\rcd$ is defined as follows. 
 \[
     \begin{aligned}
-             \rcd[X := x] = \sum_{i=0}^{k} P_i \geq \lceil k \cdot \thr{CONS}\rceil
+             \rcd = \sum_{i=0}^{k} P_i \geq \lceil k \cdot \thr{CONS}\rceil
     \end{aligned}
 \]
 where $P_i = 1$ if $TTC_i \leq \thr{TH\_TTC\_r}$, otherwise $P_i = 0$ and $k = \lceil n \cdot \thr{RC\_CONS} \rceil$.
@@ -216,21 +217,21 @@ where $P_i = 1$ if $TTC_i \leq \thr{TH\_TTC\_r}$, otherwise $P_i = 0$ and $k = \
 \end{definition}
 
 \begin{definition}[Critical TTC predicate]\label{def:app_cdist}
-Given a valuation $x \in \mathbb{R}^n$ of $X$, the predicate $\cd$ is defined as follows. 
+The predicate $\cd$ is defined as follows. 
 \[
     \begin{aligned}
-             \cd[X := x] = \sum_{i=0}^{k} P_i \geq \lceil k \cdot \thr{CONS}\rceil
+             \cd = \sum_{i=0}^{k} P_i \geq \lceil k \cdot \thr{CONS}\rceil
     \end{aligned}
 \]
 where $P_i = 1$ if $TTC_i \leq \thr{TH\_TTC\_c}$, otherwise $P_i = 0$ and $k = \lceil n \cdot \thr{C\_CONS} \rceil$.
 \end{definition}
 
 \begin{definition}[No TTC consensus]\label{def:app_uncertain}
-Being $n = |X|$, for any $x \in \mathbb{R}^n$, the predicate $\unc$ as defined as follows.
+The predicate $\unc$ as defined as follows.
     \[
     \begin{aligned}
-        \unc[X := x] = &\neg \sd[X := x] \land \neg \srd[X := x] \; \land \\ 
-        &\neg \rcd[X := x] \land \neg \cd[X := x]
+        \unc = &\neg \sd \land \neg \srd \; \land \\ 
+        &\neg \rcd \land \neg \cd
     \end{aligned}
     \]
 \end{definition}
@@ -238,18 +239,18 @@ Being $n = |X|$, for any $x \in \mathbb{R}^n$, the predicate $\unc$ as defined a
 The mode-dependent invariants express admissible continuous states while the automaton resides in a given discrete location. These invariants enforce that the controller remains in a state only as long as the corresponding perception conditions remain compatible with that mode. In particular, they ensure that stale information cannot lock the automaton in a mode indefinitely, and that a new sensor update (captured by the timer~$t$) eventually forces a transition through the sensing edge.
 For clarity, in the auxiliary predicates used in~\Cref{def:inv}, we omit writing the assignment $X := x$. 
 \begin{definition}[State Invariants]\label{def:inv}
-Being $n = |X|$, for any $x \in \mathbb{R}^n$, the function $\thr{Inv}(l)[X := x]$ is defined as follows.
+The function $\thr{Inv}(l)$ is defined as follows. 
 \[
 \begin{aligned}
-&\inv{\Normal}[X := x] = t < \thr{D\_FREQ} \; \land \\
+&\inv{\Normal} = t < \thr{D\_FREQ} \; \land \\
 &\qquad\qquad(s_d \geq \thr{STALE} \lor  s_c \geq \thr{STALE} \lor \sd \lor \unc) \\
 % &\inv{\Warning} = \{ x \in X \mid \validD(x) \land \big(\neg \validC(x) \; \lor \\ 
 % &\qquad\qquad\unc(x)\big) \land t < \thr{D\_FREQ}\} \\
-&\inv{\Throttle}[X := x] = t < \thr{D\_FREQ} \land  s_c < \thr{STALE} \; \land \\ 
+&\inv{\Throttle} = t < \thr{D\_FREQ} \land  s_c < \thr{STALE} \; \land \\ 
 &\qquad\qquad \big((\srd \land \neg \rcd \land \neg \cd) \lor \unc \big)\\
-&\inv{\SoftBrake}[X := x] = t < \thr{D\_FREQ} \land s_c < \thr{STALE} \; \land \\ 
+&\inv{\SoftBrake} = t < \thr{D\_FREQ} \land s_c < \thr{STALE} \; \land \\ 
 &\qquad\qquad \big( (\rcd \land \neg \cd) \lor \unc \big) \\
-&\inv{\EmergencyBrake}[X := x] = t < \thr{D\_FREQ} \land s_c < \thr{STALE}
+&\inv{\EmergencyBrake} = t < \thr{D\_FREQ} \land s_c < \thr{STALE}
 \end{aligned}
 \]
 \end{definition}
@@ -290,32 +291,32 @@ Guard conditions determine when a discrete transition may fire. They combine per
 Structurally, the guards partition all admissible states in such a way that the automaton remains deterministic whenever a transition is enabled.
 For clarity, in the auxiliary predicates used in~\Cref{def:app_guards}, we omit writing the assignment $X := x$. 
 \begin{definition}[Guards]\label{def:app_guards}
-Being $n = |X|$, for any $x \in \mathbb{R}^n$ and $e \in E$, we define guard predicates as follows. 
+For $e \in E$, we define guard predicates as follows. 
 \[
 \begin{aligned}
-G(e_1)[X := x] &= t \ge \thr{D\_FREQ} \\
+G(e_1) &= t \ge \thr{D\_FREQ} \\
 % G(e_2) &= \{x \in X \mid \validD(x) \land \neg \validC(x) \; \land  \\ 
 % & t < \thr{D\_FREQ} \}
-G(e_2)[X := x]  &= t < \thr{D\_FREQ} \land s_c < \thr{STALE} \; \land \\
+G(e_2)  &= t < \thr{D\_FREQ} \land s_c < \thr{STALE} \; \land \\
 &\srd \land \neg \rcd \land \neg \cd \\
-G(e_3)[X := x]  &= t < \thr{D\_FREQ} \land s_c < \thr{STALE} \; \land  \\
+G(e_3)  &= t < \thr{D\_FREQ} \land s_c < \thr{STALE} \; \land  \\
 &\rcd  \land \neg \cd \\
-G(e_4)[X := x]  &= t < \thr{D\_FREQ} \land s_c < \thr{STALE} \land \cd \\
-G(e_{5})[X := x] &= t < \thr{D\_FREQ} \; \land \\ 
+G(e_4)  &= t < \thr{D\_FREQ} \land s_c < \thr{STALE} \land \cd \\
+G(e_{5}) &= t < \thr{D\_FREQ} \; \land \\ 
 &\big(s_d \geq \thr{STALE} \lor (s_c < \thr{STALE} \land \sd)\big)  \\
-G(e_{6})[X := x] &= G(e_1)[X := x] \\
-G(e_{7})[X := x] &= G(e_3)[X := x] \\
-G(e_{8})[X := x] &= G(e_4)[X := x] \\
-G(e_{9})[X := x] &= G(e_5)[X := x] \\
-G(e_{6})[X := x] &= G(e_1)[X := x] \\
-G(e_{7})[X := x] &= G(e_3)[X := x] \\
-G(e_{8})[X := x] &= G(e_4)[X := x] \\
-G(e_{9})[X := x] &= G(e_5)[X := x] \\
-G(e_{10})[X := x] &= G(e_2)[X := x] \\
-G(e_{11})[X := x] &= G(e_1)[X := x] \\
-G(e_{12})[X := x] &= G(e_5)[X := x]\\
-G(e_{13})[X := x] &= t < \thr{D\_FREQ} \land s_c \geq \thr{STALE} \\
-G(e_{14})[X := x] &= G(e_1)[X := x] 
+G(e_{6}) &= G(e_1) \\
+G(e_{7}) &= G(e_3) \\
+G(e_{8}) &= G(e_4) \\
+G(e_{9}) &= G(e_5) \\
+G(e_{6}) &= G(e_1) \\
+G(e_{7}) &= G(e_3) \\
+G(e_{8}) &= G(e_4) \\
+G(e_{9}) &= G(e_5) \\
+G(e_{10}) &= G(e_2) \\
+G(e_{11}) &= G(e_1) \\
+G(e_{12}) &= G(e_5)\\
+G(e_{13}) &= t < \thr{D\_FREQ} \land s_c \geq \thr{STALE} \\
+G(e_{14}) &= G(e_1) 
 \end{aligned}
 \]
 \[
@@ -337,41 +338,35 @@ G(e_{14})[X := x] &= G(e_1)[X := x]
 % \]
 \end{definition}
 
-The functions $\sns$ and $\rst$ govern how the continuous state is updated upon taking an edge. The former incorporates a fresh sensor measurement and shifts the history buffers, while the latter keeps the existing measurements but selectively resets the staleness counters. Together, they ensure that the automaton cleanly separates the arrival of new data from pure time-driven maintenance steps.
+The predicates $\sns$ and $\rst$ govern how the continuous state is updated upon taking an edge. The former incorporates a fresh sensor measurement and shifts the history buffers, while the latter keeps the existing measurements but selectively resets the staleness counters. Together, they ensure that the automaton cleanly separates the arrival of new data from pure time-driven maintenance steps.
 
 
 \begin{definition}[Sense function]\label{def:app_sense}
-Being $n = |X|$, for any $x,x' \in \mathbb{R}^n$, $\sns[X,X' := x,x']$ is defined as follows.
-    \[
-    \begin{aligned}
-        \sns[X,X' := x,x'] = \phi[X,X' := x,x']
-    \end{aligned}
-\]
-where, the predicate $\phi[X,X' := x,x']$ holds if $t' = 0$, $C \in [0,1]$ and 
+The $\sns$ predicate, being $C \in [0,1]$, 
 \[
 \begin{aligned}
 TTC &=
   \begin{cases}
     \thr{NO\_TTC} & \text{if } C < \thr{TH\_C},\\
-    v \in \mathbb{R}_{>0} & \text{otherwise,}
+    val \in \mathbb{R}_{>0} & \text{otherwise,}
   \end{cases}\\
 cs &=
   \begin{cases}
     0 & \text{if } C < \thr{TH\_C},\\
-    v \in \{0,1\} & \text{otherwise,}
+    val \in \{0,1\} & \text{otherwise,}
   \end{cases}
 \end{aligned}
 \]  
 \end{definition}
+holds if:
+\begin{itemize}
+    \item $C'_0 = C, TTC'_0 = TTC, cs'_0 = cs$;
+    \item $C'_{i+1} = C_i, TTC'{i+1} = TTC_i, cs'_{i+1} = cs_i$, for $0 \leq i < n - 1$;
+    \item $s'_d = s_d, s'_c = s_c, t' = t$. 
+\end{itemize} 
 
 \begin{definition}[Reset timers function]\label{def:app_reset_func}
-Being $n = |X|$, for any $x,x' \in \mathbb{R}^n$, $\rst[X,X' := x,x']$ is defined as follows.
-    \[
-    \begin{aligned}
-        &\rst[X,X' := x,x'] = \phi[X,X' := x,x']
-    \end{aligned}
-\]
-where the predicate $\phi[X,X' := x,x']$ holds if
+The predicate $\rst$ holds if
 \[
     \begin{aligned}
     s_d' &=     
@@ -387,16 +382,15 @@ where the predicate $\phi[X,X' := x,x']$ holds if
     \end{aligned}
 \]
 \end{definition}
+while all other variables remain unchanged.
 
 
 \begin{definition}[Reset]\label{def:app_reset}
-Being $n = |X|$, for any $x,x' \in \mathbb{R}^n$ and $e \in E$, the function $R(e)[X,X' := x,x']$ is defined as follows.
-\\\\
-$R(e)[X,X' := x,x'] =$
-\[
+For any $e \in E$, the function $R(e)$ is defined as follows.
+\[R(e) = 
     \begin{cases}
-        \sns[X,X' := x,x'] & \text{if } e \in \{ e_1, e_6, e_{11}, e_{14}\} \\
-        \rst[X,X' := x,x'] & \text{otherwise}
+        \sns & \text{if } e \in \{ e_1, e_6, e_{11}, e_{14}\} \\
+        \rst & \text{otherwise}
     \end{cases}
 \]
 \end{definition}
